@@ -44,43 +44,43 @@ jobs:
       - name: Lay out the browser assets
         shell: bash
         run: |
-          mkdir -p dist/pkg/vendor
+          mkdir -p release/pkg/vendor
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp dist/punani.exe dist/pkg/punani.exe
+            cp dist/punani.exe release/pkg/punani.exe
           else
-            cp dist/punani dist/pkg/punani
-            chmod +x dist/pkg/punani
+            cp dist/punani release/pkg/punani
+            chmod +x release/pkg/punani
           fi
-          cp src/web/ui.html src/web/logo.png dist/pkg/
-          cp node_modules/zustand/esm/vanilla.mjs dist/pkg/vendor/zustand.js
+          cp src/web/ui.html src/web/logo.png release/pkg/
+          cp node_modules/zustand/esm/vanilla.mjs release/pkg/vendor/zustand.js
 
       - name: Smoke-test the packaged binary
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            ./dist/pkg/punani.exe --version
+            ./release/pkg/punani.exe --version
           else
-            ./dist/pkg/punani --version
+            ./release/pkg/punani --version
           fi
-          test -f dist/pkg/ui.html
-          test -f dist/pkg/vendor/zustand.js
+          test -f release/pkg/ui.html
+          test -f release/pkg/vendor/zustand.js
 
       - name: Pack
         shell: bash
         run: |
-          cd dist/pkg
+          cd release/pkg
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            7z a "../punani-${{ matrix.target }}.zip" .
+            7z a "../../punani-${{ matrix.target }}.zip" .
           else
-            tar -czf "../punani-${{ matrix.target }}.tar.gz" .
+            tar -czf "../../punani-${{ matrix.target }}.tar.gz" .
           fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
-            dist/punani-${{ matrix.target }}.tar.gz
-            dist/punani-${{ matrix.target }}.zip
+            punani-${{ matrix.target }}.tar.gz
+            punani-${{ matrix.target }}.zip
           if-no-files-found: error
 
   release:

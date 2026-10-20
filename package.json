@@ -12,7 +12,17 @@
     "node": ">=20"
   },
   "files": [
-    "dist",
+    "dist/**/*.js",
+    "dist/**/*.map",
+    "dist/**/*.html",
+    "dist/**/*.png",
+    "dist/**/*.svg",
+    "!dist/pkg/**",
+    "!dist/release/**",
+    "!dist/punani",
+    "!dist/*.tgz",
+    "!dist/*.tar.gz",
+    "!dist/*.zip",
     "README.md",
     "LICENSE"
   ],
@@ -24,7 +34,7 @@
     "clean": "rm -rf dist",
     "demo": "bash scripts/demo.sh",
     "test": "tsx --test test/*.test.ts",
-    "prepublishOnly": "npm run build && npm test",
+    "prepublishOnly": "npm run build && npm test && node scripts/check-package.mjs",
     "prepack": "npm run build",
     "docker:build": "docker build -t punani-powerd .",
     "docker:run": "docker run --rm -it -p 127.0.0.1:4096:4096 -v \"$HOME/.config/punani-powerd:/config\" -v \"$HOME/.local/share/punani-powerd:/data\" punani-powerd web --host 0.0.0.0 --port 4096",

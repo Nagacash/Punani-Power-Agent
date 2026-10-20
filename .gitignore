@@ -15,3 +15,7 @@ landing/punani-ai/
 # Locally packed release archives
 punani-*.tar.gz
 punani-*.zip
+
+# Locally packed release artifacts
+release/
+punani-*.tgz
