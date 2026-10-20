@@ -227,12 +227,18 @@ export class WebServer {
     // the other loopback family too, so both spellings work. A failure here
     // is not worth failing the start over.
     if (isLoopback(this.options.host)) {
+      // Take the family the primary listener actually got, and the port it
+      // actually got. A configured host of "localhost" may have resolved to
+      // either, and a port of 0 is assigned by the system.
+      const address = this.server!.address()
+      const bound = typeof address === "object" && address !== null ? address : undefined
+      const mirrorHost = bound?.family === "IPv6" ? "127.0.0.1" : "::1"
+      const mirrorPort = bound?.port ?? this.boundPort
       this.mirror = http.createServer(handler)
-      const mirrorHost = this.options.host === "::1" ? "127.0.0.1" : "::1"
       try {
         await new Promise<void>((resolve) => {
           this.mirror!.once("error", () => resolve())
-          this.mirror!.listen(this.boundPort, mirrorHost, () => resolve())
+          this.mirror!.listen(mirrorPort, mirrorHost, () => resolve())
         })
       } catch {
         /* the other family is not available; one listener is enough */
@@ -313,7 +319,11 @@ export class WebServer {
     this.pickers.clear()
     await Promise.all([
       new Promise<void>((resolve) => this.server?.close(() => resolve())),
-      new Promise<void>((resolve) => this.mirror?.close(() => resolve())),
+      // No mirror means no second listener to close. The promise has to
+      // settle either way, or stop() waits forever.
+      this.mirror
+        ? new Promise<void>((resolve) => this.mirror!.close(() => resolve()))
+        : Promise.resolve(),
     ])
   }
 

@@ -126,3 +126,51 @@ test("the module script the page imports is actually served", async () => {
     await stop()
   }
 })
+
+test("stop settles when there is no mirror listener", async () => {
+  // A non-loopback host gets no mirror. stop() must not wait for one.
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "punani-stop-project-"))
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "punani-stop-state-"))
+  const config = new ConfigStore(path.join(stateDir, "config.json"))
+  const server = new WebServer(config, {
+    projectRoot,
+    port: 0,
+    host: "0.0.0.0",
+    token: TOKEN,
+  })
+  await server.start()
+  const settled = await Promise.race([
+    server.stop().then(() => "stopped"),
+    new Promise((resolve) => setTimeout(() => resolve("HUNG"), 3000)),
+  ])
+  assert.equal(settled, "stopped", "stop() must not wait for a mirror that was never created")
+})
+
+test("the mirror serves the same port as the primary listener", async () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "punani-mirror-project-"))
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "punani-mirror-state-"))
+  const config = new ConfigStore(path.join(stateDir, "config.json"))
+  // Port 0: the system assigns one, and the mirror has to use that same one.
+  const server = new WebServer(config, { projectRoot, port: 0, host: "127.0.0.1", token: TOKEN })
+  await server.start()
+  try {
+    const port = server.port
+    const ip4 = await rawGet(port, "/vendor/zustand.js", { "x-punani-token": TOKEN })
+    assert.equal(ip4.status, 200, "the primary listener must answer")
+    // The same port on the other family.
+    const ip6 = await new Promise<number>((resolve) => {
+      const request = http.request(
+        { host: "::1", port, path: "/vendor/zustand.js", method: "GET", headers: { "x-punani-token": TOKEN } },
+        (response) => {
+          response.resume()
+          resolve(response.statusCode ?? 0)
+        },
+      )
+      request.on("error", () => resolve(0))
+      request.end()
+    })
+    assert.equal(ip6, 200, "the mirror must answer on the same port")
+  } finally {
+    await server.stop()
+  }
+})
