@@ -47,6 +47,45 @@ export interface WebOptions {
 }
 
 /**
+ * Find the browser state library.
+ *
+ * A build copies it next to the compiled server. Running from source there
+ * is no copy, so fall back to the installed package. Without this the page
+ * loads and then every script import 404s, which leaves a page with no
+ * working buttons and no error anyone can see.
+ */
+function findVendorFile(): string | undefined {
+  const candidates = [
+    path.join(HERE, "vendor", "zustand.js"),
+    path.join(HERE, "..", "..", "node_modules", "zustand", "esm", "vanilla.mjs"),
+  ]
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate
+    } catch {
+      /* keep looking */
+    }
+  }
+  return undefined
+}
+
+/** Is this a loopback host we should mirror onto the other family? */
+function isLoopback(host: string): boolean {
+  return host === "127.0.0.1" || host === "::1" || host === "localhost"
+}
+
+/** The port was taken. The caller decides whether to reuse it or move. */
+export class PortInUseError extends Error {
+  constructor(
+    readonly port: number,
+    readonly host: string,
+  ) {
+    super(`port ${port} is already in use on ${host}`)
+    this.name = "PortInUseError"
+  }
+}
+
+/**
  * The browser frontend.
  *
  * It runs the same agent loop as the terminal, over HTTP instead of a TTY.
@@ -60,17 +99,6 @@ export interface WebOptions {
  * It binds to 127.0.0.1 by default. Exposing it wider means exposing shell
  * execution, so that is opt-in and warns.
  */
-/** The port was taken. The caller decides whether to reuse it or move. */
-export class PortInUseError extends Error {
-  constructor(
-    readonly port: number,
-    readonly host: string,
-  ) {
-    super(`port ${port} is already in use on ${host}`)
-    this.name = "PortInUseError"
-  }
-}
-
 export class WebServer {
   private readonly hub = new EventHub()
   private readonly permissions = new PermissionQueue()
@@ -100,6 +128,8 @@ export class WebServer {
   readonly token: string
   readonly taskLabel: string
   private server?: http.Server
+  /** A second listener on the other loopback family, so "localhost" works. */
+  private mirror?: http.Server
   /** The active project. Switchable from the browser. */
   private projectRoot: string
   /** The port in use. Changeable before the server starts. */
@@ -173,12 +203,14 @@ export class WebServer {
     this.permissionEngine = new PermissionEngine(this.config.permissions())
     this.session = this.sessions.create(this.projectRoot)
 
-    this.server = http.createServer((request, response) => {
+    const handler = (request: http.IncomingMessage, response: http.ServerResponse): void => {
       this.handle(request, response).catch((error) => {
         response.writeHead(500, { "content-type": "application/json" })
         response.end(JSON.stringify({ error: String(error) }))
       })
-    })
+    }
+
+    this.server = http.createServer(handler)
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -188,6 +220,23 @@ export class WebServer {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error
       throw new PortInUseError(this.boundPort, this.options.host)
+    }
+
+    // "localhost" resolves to ::1 before 127.0.0.1 on most systems, and a
+    // browser that only tries the first one gets "connection refused". Bind
+    // the other loopback family too, so both spellings work. A failure here
+    // is not worth failing the start over.
+    if (isLoopback(this.options.host)) {
+      this.mirror = http.createServer(handler)
+      const mirrorHost = this.options.host === "::1" ? "127.0.0.1" : "::1"
+      try {
+        await new Promise<void>((resolve) => {
+          this.mirror!.once("error", () => resolve())
+          this.mirror!.listen(this.boundPort, mirrorHost, () => resolve())
+        })
+      } catch {
+        /* the other family is not available; one listener is enough */
+      }
     }
 
     registerWebInstance({
@@ -262,7 +311,10 @@ export class WebServer {
     this.preview.disable()
     for (const picker of this.pickers.values()) picker.child.kill()
     this.pickers.clear()
-    await new Promise<void>((resolve) => this.server?.close(() => resolve()))
+    await Promise.all([
+      new Promise<void>((resolve) => this.server?.close(() => resolve())),
+      new Promise<void>((resolve) => this.mirror?.close(() => resolve())),
+    ])
   }
 
   /* ---------------------------------------------------------------- */
@@ -275,8 +327,10 @@ export class WebServer {
     // The landing URL carries the token; hand it over as a cookie and clean up.
     if (url.pathname === "/" && url.searchParams.get("t")) {
       if (url.searchParams.get("t") !== this.token) {
-        response.writeHead(403, { "content-type": "text/plain" })
-        response.end("bad token")
+        // The token is minted per run, so a link from an earlier run is dead.
+        // Show the sign-in page rather than a bare refusal: it has the box to
+        // paste the current token into.
+        this.sendHelp(response, "That sign-in link is from an earlier run. The token changes every time the server starts — paste the current one below.")
         return
       }
       response.writeHead(302, {
@@ -473,8 +527,14 @@ export class WebServer {
 
   /** The state library, served from the install directory. */
   private sendVendor(response: http.ServerResponse): void {
+    const file = findVendorFile()
+    if (!file) {
+      response.writeHead(404, { "content-type": "text/plain" })
+      response.end("not found")
+      return
+    }
     try {
-      const bytes = fs.readFileSync(path.join(HERE, "vendor", "zustand.js"))
+      const bytes = fs.readFileSync(file)
       response.writeHead(200, {
         "content-type": "text/javascript; charset=utf-8",
         "cache-control": "public, max-age=3600",
@@ -673,7 +733,7 @@ export class WebServer {
   }
 
   /** A plain page explaining what to do when the link is missing or stale. */
-  private sendHelp(response: http.ServerResponse): void {
+  private sendHelp(response: http.ServerResponse, message?: string): void {
     response.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
     response.end(`<!doctype html><meta charset="utf-8">
 <title>Punani powerd — sign in</title>
@@ -700,7 +760,7 @@ export class WebServer {
     <button type="submit">Sign in</button>
   </form>
   <p style="font:13px ui-monospace,Menlo,monospace">The token is the part after <code>?t=</code> in the link. Run <code>punani web --open</code> to open the signed-in link automatically.</p>
-  <p class="err" id="e" hidden>That token was not accepted. Copy it again from the terminal.</p>
+  <p class="err" id="e"${message ? "" : " hidden"}>${message ?? "That token was not accepted. Copy it again from the terminal."}</p>
   <p class="note">This page is the <strong>local coding agent</strong> on port 4096. It does not use Clerk.
      The email list and Clerk sign-up live on the <a href="http://localhost:3000#join">Punani AI landing page</a> (port 3000).</p>
 </div>
@@ -740,7 +800,13 @@ export class WebServer {
       } catch {
         return 403
       }
-      if (originHost !== url.host) return 403
+      // Compare against the host the client addressed, not the one this
+      // server believes it has. A browser on "localhost:4096" sends that as
+      // both Host and Origin, and a module script fetch carries an Origin
+      // header, so comparing against the bound address refused every script
+      // load under the name people actually type.
+      const host = request.headers.host ?? url.host
+      if (originHost !== host) return 403
     }
     return null
   }
