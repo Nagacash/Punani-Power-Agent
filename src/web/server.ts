@@ -13,6 +13,7 @@ import { createSkillTools } from "../tool/skill.js"
 import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex } from "../skills/loader.js"
 import { McpRegistry } from "../mcp/registry.js"
 import { buildSystemPrompt, describeProject, runAgentTurn } from "../agent/agent.js"
+import { stopDevServers } from "../tool/dev.js"
 import { loadProjectInstructions } from "../agent/instructions.js"
 import { PermissionEngine, resolvePermission } from "../agent/permission.js"
 import { LlmClient } from "../llm/client.js"
@@ -319,6 +320,7 @@ export class WebServer {
     this.permissions.rejectAll("server stopped")
     this.abort?.abort()
     await this.mcp?.stop()
+    stopDevServers()
     // The file watcher holds the event loop open if it is left running.
     this.preview.disable()
     for (const picker of this.pickers.values()) picker.child.kill()
@@ -1124,6 +1126,10 @@ export class WebServer {
           return await promise
         }),
       notify: (message: string) => this.hub.send({ type: "notice", text: message }),
+      setPreview: (url: string) => {
+        this.preview.enable("url", url)
+        this.hub.send({ type: "preview", ...this.preview.state() })
+      },
       previewDiff: (file: string, before: string, after: string) => {
         const result = diffLines(before, after)
         this.hub.send({

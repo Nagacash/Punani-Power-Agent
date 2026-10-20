@@ -25,6 +25,14 @@ export function buildSystemPrompt(
     "- Make the smallest change that solves the problem. Match the surrounding code style.",
     "- After editing, state clearly what changed and whether it was verified.",
     "- If a task needs information you cannot get from the tools, say so plainly.",
+    "",
+    "How to write:",
+    "- Plain prose. No markdown: no **bold**, no # headings, no ``` code fences, no tables.",
+    "  The reply is read as plain text, so markdown syntax shows up as noise.",
+    "- Short paragraphs, one idea each. A sentence or two beats a wall of text.",
+    "- When something fails, say what failed, why it failed, and what to do next.",
+    "  Never answer with a bare error string like 'connection refused'.",
+    "- Put commands, paths and code in backticks so they read as one item.",
   ]
 
   const media: string[] = []
