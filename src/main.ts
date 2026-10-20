@@ -413,7 +413,7 @@ async function main(): Promise<number> {
     }
 
     if (options.web) {
-      const { WebServer } = await import("./web/server.js")
+      const { PortInUseError, WebServer } = await import("./web/server.js")
       const host = options.host ?? "127.0.0.1"
       const port = options.port ?? 4096
       const server = new WebServer(config, {
@@ -431,21 +431,32 @@ async function main(): Promise<number> {
       try {
         await server.start()
       } catch (error) {
-        const err = error as NodeJS.ErrnoException
-        if (err.code === "EADDRINUSE") {
-          errorLine(`port ${port} is already in use (${host}:${port}).`)
-          infoLine(`Another punani web may still be running — open ${style.cyan(`http://${host}:${port}`)} or stop the old process:`)
-          infoLine(`  lsof -iTCP:${port} -sTCP:LISTEN   then   kill <pid>`)
-          infoLine(`Or use a different port: ${style.cyan(`punani web --port ${port + 1}`)}`)
-          return 1
+        if (!(error instanceof PortInUseError)) throw error
+        const { identify, findFreePort } = await import("./web/ports.js")
+        const existing = await identify(error.port, "127.0.0.1")
+        if (existing) {
+          // It is one of ours. Say so plainly instead of failing.
+          process.stdout.write(
+            `\n${style.bold("Punani powerd")} ${style.gray("· already running")}\n\n` +
+              `  ${style.gray("url")}      ${style.cyan(`http://${error.host}:${error.port}`)}\n` +
+              `  ${style.gray("project")}  ${existing.project}\n` +
+              `  ${style.gray("pid")}      ${existing.pid}\n\n` +
+              `  ${style.gray("Your browser is probably still signed in. To run a second one, give it its own port:")}\n` +
+              `    ${style.cyan(`punani web --port ${error.port + 1}`)}\n\n`,
+          )
+          return 0
         }
-        throw error
+        // Something else has the port. Move rather than fail.
+        const free = await findFreePort(error.port + 1, "127.0.0.1")
+        warnLine(`port ${error.port} was taken by another program, using ${free} instead.`)
+        server.setPort(free)
+        await server.start()
       }
       if (!options.spawned) {
         process.stdout.write(`\n${style.bold("Punani powerd")} ${style.gray("· browser interface")}\n\n`)
         process.stdout.write(`  ${style.gray("task")}    ${server.taskLabel}\n`)
         process.stdout.write(`  ${style.gray("project")}  ${projectRoot}\n`)
-        process.stdout.write(`  ${style.gray("url")}      ${style.cyan(`http://${host}:${port}`)}\n`)
+        process.stdout.write(`  ${style.gray("url")}      ${style.cyan(server.url)}\n`)
         process.stdout.write(`  ${style.gray("token")}    ${style.bold(style.gold(server.token))}\n\n`)
         process.stdout.write(
           `  ${style.gray("Open")} ${style.cyan(server.loginUrl)}\n` +

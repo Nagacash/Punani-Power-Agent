@@ -8,15 +8,15 @@ an editor is a third.
 
 ---
 
-## The one thing that has to change
+## The one thing that had to change — **done**
 
-Right now `write`, `edit`, `image` and `audio` write to disk directly
-(`src/tool/edit-tools.ts`, `src/tool/image.ts`, `src/tool/audio.ts`). In a
-terminal that is right. In an editor it is wrong: the change should appear as a
-**reviewable diff in the editor**, which the user can accept, reject, or undo
-per hunk. That is most of what makes Cursor feel different from a CLI agent.
+`write`, `edit`, `image`, and `audio` now go through **`ToolContext.mutate`**
+(`src/tool/types.ts`, `src/tool/fsutil.ts` → `diskMutate`). In a terminal that
+still writes to disk; in an editor you supply a mutator so the change appears as a
+**reviewable diff** the user can accept or reject. Refusal returns
+`applied: false` with a reason — no silent partial state.
 
-So the first task is a file-mutation seam.
+The seam (for reference):
 
 ```ts
 // src/tool/types.ts
@@ -57,12 +57,11 @@ export const diskMutator = {
 }
 ```
 
-**That is the whole refactor for day one.** It is a few dozen lines and it
-changes no agent logic.
+**Day-one mutate refactor:** shipped. Tests and terminal/browser hosts use
+`diskMutate`.
 
-One more small thing: `buildSystemPrompt` reads `process.cwd()`
-(`src/agent/agent.ts:15`). Make the project root a parameter so the extension
-can point it at the workspace folder.
+Still open: `buildSystemPrompt` should not rely on `process.cwd()` where the
+extension needs an explicit workspace root.
 
 ---
 
@@ -70,8 +69,7 @@ can point it at the workspace folder.
 
 **Goal:** a library any host can drive.
 
-1. **Add `mutate` to `ToolContext`** and route the four writing tools through it
-   (above). Keep a disk implementation for the terminal and the browser.
+1. ~~**Add `mutate` to `ToolContext`**~~ — done.
 2. **Add an engine factory.** Right now the wiring is spread across
    `src/cli/repl.ts` and `src/web/server.ts`. Extract it:
 

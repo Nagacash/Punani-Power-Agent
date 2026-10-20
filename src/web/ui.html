@@ -1209,6 +1209,9 @@
         if (st.taskLabel) bits.push(st.taskLabel);
         if (m) bits.push(m.name);
         if (st.projectInfo?.name) bits.push(st.projectInfo.name + (st.projectInfo.branch ? " (" + st.projectInfo.branch + ")" : ""));
+        // The project's own instruction files, so it is visible that they are
+        // being followed.
+        if (st.projectInfo?.instructions?.length) bits.push(st.projectInfo.instructions.join(", "));
         $("status").textContent = st.busy ? "working…" : bits.join("  ·  ");
       }
 

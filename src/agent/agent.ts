@@ -11,6 +11,7 @@ export function buildSystemPrompt(
   projectRoot: string,
   capabilities: { image?: boolean; audio?: boolean; vision?: boolean } = {},
   catalog: string = "",
+  instructions: string = "",
 ): string {
   const relative = path.relative(process.cwd(), projectRoot) || "."
   const rules = [
@@ -44,6 +45,9 @@ export function buildSystemPrompt(
   }
   if (media.length > 0) {
     rules.push("", "Media:", ...media)
+  }
+  if (instructions) {
+    rules.push("", instructions)
   }
   if (catalog) {
     rules.push("", catalog)

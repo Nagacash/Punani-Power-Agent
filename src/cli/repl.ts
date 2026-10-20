@@ -12,6 +12,7 @@ import { McpRegistry } from "../mcp/registry.js"
 import { KNOWN_MCP_SERVERS } from "../mcp/client.js"
 import { PermissionEngine, resolvePermission } from "../agent/permission.js"
 import { buildSystemPrompt, describeProject, runAgentTurn } from "../agent/agent.js"
+import { loadProjectInstructions } from "../agent/instructions.js"
 import { SessionStore, type SessionMeta } from "../session/store.js"
 import { messageText, type ChatMessage } from "../llm/client.js"
 import type { ModelInfo } from "../provider/types.js"
@@ -81,6 +82,10 @@ export async function startApp(deps: AppDeps): Promise<void> {
   const messages: ChatMessage[] = [...(deps.resume?.messages ?? [])]
   const imageSettings = config.imageSettings()
   const audioSettings = config.audioSettings()
+  const instructions = loadProjectInstructions(projectRoot)
+  if (instructions.files.length > 0) {
+    infoLine(`following ${instructions.files.join(", ")}`)
+  }
 
   // Skills: a table of contents, not a wall of descriptions.
   const skillRoots = defaultRoots(projectRoot)
@@ -120,7 +125,7 @@ export async function startApp(deps: AppDeps): Promise<void> {
     sessions.append(session, { role: "user", content: input, timestamp: Date.now() })
     messages.push({ role: "user", content: input })
 
-    await runTurn(deps, session, messages, permissions, tools, catalog)
+    await runTurn(deps, session, messages, permissions, tools, catalog, instructions.text)
   }
 
   infoLine("bye")
@@ -134,6 +139,7 @@ async function runTurn(
   permissions: PermissionEngine,
   tools: Tool[],
   catalog: string,
+  instructions: string,
 ): Promise<void> {
   const { registry, projectRoot, ask, sessions } = deps
   const model = deps.state.model
@@ -178,6 +184,7 @@ async function runTurn(
       vision: model.vision,
     },
     catalog,
+    instructions,
   )
   const withSystem: ChatMessage[] = [{ role: "system", content: system }, ...messages]
 
