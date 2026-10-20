@@ -118,3 +118,26 @@ test("a command that never serves anything reports the log instead of hanging", 
   assert.match(result.output, /Log:/)
   assert.ok(fs.existsSync(path.join(projectRoot, ".punani", "dev.log")), "the log must exist")
 })
+
+test("a server bound only to the IPv6 loopback is still found", async () => {
+  // Vite binds to "localhost", which is ::1 first on most systems, so it
+  // listens on the IPv6 loopback only. Probing IPv4 alone never finds it.
+  const port = 4393
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "punani-dev-v6-"))
+  fs.writeFileSync(
+    path.join(projectRoot, "package.json"),
+    JSON.stringify({
+      name: "dev-v6",
+      private: true,
+      scripts: {
+        dev: `node -e "require('http').createServer((q,s)=>{console.log('ready on http://localhost:${port}');s.end('ok')}).listen(${port},'::1')"`,
+      },
+    }),
+  )
+  let preview = ""
+  const result = await devTool.run({ command: "npm run dev" }, context(projectRoot, (url) => (preview = url)))
+  const pid = Number(/\(pid (\d+)\)/.exec(result.output)?.[1] ?? 0)
+  if (pid) strayGroups.push(pid)
+  assert.ok(!result.isError, `the dev tool failed: ${result.output}`)
+  assert.equal(preview, `http://localhost:${port}`)
+})

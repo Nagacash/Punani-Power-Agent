@@ -2,6 +2,7 @@ import { spawn } from "node:child_process"
 import fs from "node:fs"
 import net from "node:net"
 import path from "node:path"
+import { isDestructiveCommand } from "./bash.js"
 import { ToolError, resolveInProject } from "./fsutil.js"
 import type { Tool, ToolContext, ToolResult } from "./types.js"
 
@@ -42,8 +43,8 @@ export function stopDevServers(): void {
   running.clear()
 }
 
-/** Does something answer on this port? */
-function portAnswers(port: number, host = "127.0.0.1"): Promise<boolean> {
+/** Does something answer on this port, on this address? */
+function probe(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = new net.Socket()
     socket.setTimeout(600)
@@ -57,6 +58,18 @@ function portAnswers(port: number, host = "127.0.0.1"): Promise<boolean> {
       resolve(true)
     })
   })
+}
+
+/**
+ * Does something answer on this port?
+ *
+ * Both loopback families are checked. "localhost" resolves to ::1 before
+ * 127.0.0.1 on most systems, and a Vite server binds to "localhost", so it
+ * listens on ::1 only. Probing IPv4 alone never finds it.
+ */
+async function portAnswers(port: number): Promise<boolean> {
+  const [v4, v6] = await Promise.all([probe(port, "127.0.0.1"), probe(port, "::1")])
+  return v4 || v6
 }
 
 /**
@@ -142,6 +155,8 @@ export const devTool: Tool = {
       detail:
         "This server keeps running after the command returns, so the preview pane can " +
         "show it. It stays up until it is stopped.",
+      // The same warning the bash tool gives, for the same reason.
+      destructive: isDestructiveCommand(command),
       alwaysPatterns: [command],
     })
     if (!outcome.granted) {

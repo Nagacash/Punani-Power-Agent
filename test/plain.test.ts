@@ -69,6 +69,26 @@ const CASES: Array<{ name: string; input: string; expect: string }> = [
     expect: "See the docs (https://example.com).",
   },
   {
+    name: "a command keeps the asterisks that are part of it",
+    input: "Run `grep '*error*' log.txt` to find it",
+    expect: "Run grep '*error*' log.txt to find it",
+  },
+  {
+    name: "a horizontal rule does not eat the rest of the reply",
+    input: "Before\n---\nAfter the rule",
+    expect: "Before\n\nAfter the rule",
+  },
+  {
+    name: "a diff header is not mistaken for a rule",
+    input: "--- a/src/index.ts\n+++ b/src/index.ts",
+    expect: "--- a/src/index.ts\n+++ b/src/index.ts",
+  },
+  {
+    name: "an image keeps its alt text, not a link",
+    input: "![a diagram](https://example.com/a.png)",
+    expect: "a diagram",
+  },
+  {
     name: "plain text is left alone",
     input: "Everything is fine. The server is on port 3000.",
     expect: "Everything is fine. The server is on port 3000.",
