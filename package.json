@@ -51,10 +51,10 @@
   "homepage": "https://punani.agency",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Nagacash/punani-powerd.git"
+    "url": "git+https://github.com/Nagacash/Punani-Power-Agent.git"
   },
   "bugs": {
-    "url": "https://github.com/Nagacash/punani-powerd/issues"
+    "url": "https://github.com/Nagacash/Punani-Power-Agent/issues"
   },
   "author": "Naga Codex",
   "dependencies": {

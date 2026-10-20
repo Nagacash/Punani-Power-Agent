@@ -1,5 +1,9 @@
 # Punani powerd by Naga Codex
 
+**Repository:** [github.com/Nagacash/Punani-Power-Agent](https://github.com/Nagacash/Punani-Power-Agent) · **Landing:** [Punani-AI](https://github.com/Nagacash/Punani-AI) · **[punani.agency](https://punani.agency)**
+
+> **`main` is protected.** We only merge changes via pull requests — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
 A terminal-based AI coding agent. It opens a local project, talks to a model, and
 runs tools — reading files, searching, editing, and running shell commands — with
 your approval before anything risky happens.
@@ -745,6 +749,10 @@ The end-to-end test spins up a mock provider and asserts the full loop: catalog
 fetch, model selection, tool call, permission gate, tool execution, result fed
 back to the model, and the session written to disk.
 
+## Contributing
+
+Do **not** push directly to `main`. Fork the repo, open a pull request, and keep CI green. Details: [CONTRIBUTING.md](./CONTRIBUTING.md).
+
 ## License
 
-[MIT](./LICENSE) · Copyright (c) 2026 Naga Codex
+[MIT](./LICENSE) · Copyright (c) 2026 Maurice Holda
