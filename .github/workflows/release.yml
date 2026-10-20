@@ -1,0 +1,75 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build-${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: darwin-universal
+            artifact: punani-darwin-universal
+            bin: dist/punani
+          - os: ubuntu-latest
+            target: linux-x64
+            artifact: punani-linux-x64
+            bin: dist/punani
+          - os: windows-latest
+            target: windows-x64
+            artifact: punani-windows-x64.exe
+            bin: dist/punani.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: npm run build:bun
+
+      - name: Smoke-test binary
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./dist/punani.exe --version
+          else
+            chmod +x dist/punani
+            ./dist/punani --version
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.bin }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/punani-darwin-universal/punani
+            artifacts/punani-linux-x64/punani
+            artifacts/punani-windows-x64.exe/punani.exe

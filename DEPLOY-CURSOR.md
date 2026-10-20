@@ -1,13 +1,8 @@
 Deploy punani-powerd. Repo: github.com/Nagacash/Punani-Power-Agent. `main` is protected, so everything goes through a PR.
 
-## 0. Land the pending work first
+## 0. Land the pending work first — **done**
 
-Branch `docs/sync-next-and-extension-plan` has uncommitted changes from this session:
-
-- new: `src/agent/instructions.ts`, `src/web/ports.ts`, `test/instructions.test.ts`, `DEPLOY-CURSOR.md`
-- modified: `src/agent/agent.ts`, `src/cli/repl.ts`, `src/main.ts`, `src/web/server.ts`, `src/web/ui.html`, `package.json`
-
-Commit them on that branch, then open a PR into `main`. CI runs `npm run typecheck` and `npm test`; both must pass. Do not push straight to `main`.
+Merged to `main` via PR #1 (`64bfdc8`).
 
 Before any deploy command:
 
@@ -27,13 +22,7 @@ Package is `punani-powerd@1.0.0`, binary `punani`, no runtime dependencies. It i
 
 ## 2. GitHub Releases — standalone binaries, no Node needed
 
-There is no release workflow yet, only `.github/workflows/ci.yml`. Add `.github/workflows/release.yml` using the matrix in `DEPLOY.md` section 2, and add the script it calls to `package.json`:
-
-```json
-"build:bun": "bun build --compile --outfile dist/punani src/main.ts"
-```
-
-Then tag and push:
+After `.github/workflows/release.yml` is on `main`, tag and push:
 
 ```bash
 git tag v1.0.0 && git push origin v1.0.0
