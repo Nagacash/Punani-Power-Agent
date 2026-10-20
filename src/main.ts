@@ -435,15 +435,31 @@ async function main(): Promise<number> {
         const { identify, findFreePort } = await import("./web/ports.js")
         const existing = await identify(error.port, "127.0.0.1")
         if (existing) {
-          // It is one of ours. Say so plainly instead of failing.
+          // It is one of ours. Say so plainly, and hand over the sign-in
+          // token so the user is not left guessing which one is live.
+          const token = existing.token
+          const url = `http://${error.host}:${error.port}`
           process.stdout.write(
             `\n${style.bold("Punani powerd")} ${style.gray("· already running")}\n\n` +
-              `  ${style.gray("url")}      ${style.cyan(`http://${error.host}:${error.port}`)}\n` +
+              `  ${style.gray("url")}      ${style.cyan(url)}\n` +
               `  ${style.gray("project")}  ${existing.project}\n` +
-              `  ${style.gray("pid")}      ${existing.pid}\n\n` +
-              `  ${style.gray("Your browser is probably still signed in. To run a second one, give it its own port:")}\n` +
+              `  ${style.gray("pid")}      ${existing.pid}\n` +
+              (token
+                ? `  ${style.gray("token")}    ${style.bold(style.gold(token))}\n`
+                : "") +
+              `\n` +
+              (token
+                ? `  ${style.gray("Open")} ${style.cyan(`${url}/?t=${token}`)}\n\n`
+                : `  ${style.gray("The running instance did not hand over its token. Find it in the terminal that started it.")}\n\n`) +
+              `  ${style.gray("To run a second one, give it its own port:")}\n` +
               `    ${style.cyan(`punani web --port ${error.port + 1}`)}\n\n`,
           )
+          if (options.open && token) {
+            const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
+            const { spawn } = await import("node:child_process")
+            spawn(opener, [`${url}/?t=${token}`], { detached: true, stdio: "ignore" }).unref()
+            infoLine("opened in your browser")
+          }
           return 0
         }
         // Something else has the port. Move rather than fail.
