@@ -69,6 +69,12 @@ function findVendorFile(): string | undefined {
   return undefined
 }
 
+/** Did this request come from this machine? */
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1"
+}
+
 /** Is this a loopback host we should mirror onto the other family? */
 function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "::1" || host === "localhost"
@@ -368,6 +374,11 @@ export class WebServer {
           version: "1.0.0",
           pid: process.pid,
           project: this.projectRoot,
+          // The token is the sign-in credential. Hand it over only to a
+          // request that came from this machine, so a second local instance
+          // can tell the user how to get in without exposing it to the
+          // network when the server is bound wider.
+          ...(isLoopbackAddress(request.socket.remoteAddress) ? { token: this.token } : {}),
         }),
       )
       return

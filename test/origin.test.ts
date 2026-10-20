@@ -174,3 +174,18 @@ test("the mirror serves the same port as the primary listener", async () => {
     await server.stop()
   }
 })
+
+test("a local caller learns the token of the running instance", async () => {
+  const { base, stop } = await startServer()
+  try {
+    const res = await rawGet(Number(new URL(base).port), "/identify", {})
+    assert.equal(res.status, 200)
+    const body = JSON.parse(res.body)
+    assert.equal(body.app, "punani-powerd")
+    // The sign-in token, so a second local instance can tell the user how to
+    // get in instead of only saying that one is already running.
+    assert.equal(body.token, TOKEN)
+  } finally {
+    await stop()
+  }
+})
