@@ -1,0 +1,1291 @@
+import crypto from "node:crypto"
+import { spawn } from "node:child_process"
+import os from "node:os"
+import fs from "node:fs"
+import http from "node:http"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { ConfigStore } from "../config/store.js"
+import { ProviderRegistry } from "../provider/registry.js"
+import { SessionStore, toChatMessages, type SessionMeta } from "../session/store.js"
+import { buildTools } from "../tool/registry.js"
+import { createSkillTools } from "../tool/skill.js"
+import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex } from "../skills/loader.js"
+import { McpRegistry } from "../mcp/registry.js"
+import { buildSystemPrompt, describeProject, runAgentTurn } from "../agent/agent.js"
+import { PermissionEngine, resolvePermission } from "../agent/permission.js"
+import { LlmClient } from "../llm/client.js"
+import { diffLines } from "../tool/diff.js"
+import { diskMutate } from "../tool/fsutil.js"
+import { messageText, type ChatMessage } from "../llm/client.js"
+import type { ModelInfo } from "../provider/types.js"
+import type { Tool, ToolContext } from "../tool/types.js"
+import { EventHub, PermissionQueue } from "./events.js"
+import { PreviewServer } from "./preview.js"
+import { devPreviewTargets } from "./dev-preview.js"
+import { listWebInstances, nextTaskLabel, registerWebInstance, unregisterWebInstance } from "./instances.js"
+import { spawnTaskWindow } from "./spawn-task.js"
+import { Settings } from "./settings.js"
+import { log } from "../core/logger.js"
+import { redactError } from "../core/redact.js"
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+
+export interface WebOptions {
+  projectRoot: string
+  port: number
+  host: string
+  /** Where the in-browser folder browser may look. Defaults to the home folder. */
+  browseRoot?: string
+  /** Extra roots the folder browser may enter, such as mounted external drives. */
+  extraRoots?: string[]
+  /** Pre-set sign-in token (spawned task windows only; localhost). */
+  token?: string
+  /** Shown in the task switcher when several web servers share one project. */
+  taskLabel?: string
+}
+
+/**
+ * The browser frontend.
+ *
+ * It runs the same agent loop as the terminal, over HTTP instead of a TTY.
+ * Two things make it safe to expose locally:
+ *
+ *   1. A 256-bit token is minted at startup. The first request must carry it
+ *      in the URL; the server swaps it for an HttpOnly cookie and redirects.
+ *   2. Every mutating request is checked for a same-origin `Origin` header,
+ *      so a page on another site cannot drive the agent from your browser.
+ *
+ * It binds to 127.0.0.1 by default. Exposing it wider means exposing shell
+ * execution, so that is opt-in and warns.
+ */
+export class WebServer {
+  private readonly hub = new EventHub()
+  private readonly permissions = new PermissionQueue()
+  private readonly sessions: SessionStore
+  private readonly registry: ProviderRegistry
+  readonly preview: PreviewServer
+  /** MCP servers, started once and kept for the session. */
+  private mcp?: McpRegistry
+  private mcpTools: Tool[] = []
+  /** The skills available to the agent, and the index that goes in the prompt. */
+  private skillTools: Tool[] = []
+  private skillCatalog = ""
+  /**
+   * Keys the browser sent with this request. They are used for the call and
+   * then forgotten: the server never writes them to disk.
+   */
+  private requestKeys: Record<string, string> = {}
+  /** Running native folder pickers, by id. */
+  private readonly pickers = new Map<
+    string,
+    { child: ReturnType<typeof spawn>; path?: string; done: boolean; cancelled: boolean }
+  >()
+  private pickerCounter = 0
+  private readonly settings: Settings
+  /** The sign-in token. Printed by the CLI and pasted into the gate page. */
+  readonly token: string
+  readonly taskLabel: string
+  private server?: http.Server
+  /** The active project. Switchable from the browser. */
+  private projectRoot: string
+  /** Where the folder browser is allowed to look. */
+  private readonly browseRoot: string
+  /** Extra roots, such as mounted external drives. */
+  private readonly extraRoots: string[]
+
+  private session!: SessionMeta
+  private messages: ChatMessage[] = []
+  private permissionEngine!: PermissionEngine
+  private model?: ModelInfo
+  private busy = false
+  private abort?: AbortController
+  /** Follow-up prompts sent while a turn is still running. */
+  private readonly messageQueue: string[] = []
+  /** After abort, drop the in-flight user message and partial reply. */
+  private revertAfterAbort = false
+  /** Invalidates stale forced-stop timers when a new run or abort starts. */
+  private abortEpoch = 0
+  /** The tool call currently running, so a diff can be attached to it. */
+  private currentToolId?: string
+
+  constructor(
+    private readonly config: ConfigStore,
+    private readonly options: WebOptions,
+  ) {
+    this.sessions = new SessionStore()
+    this.registry = new ProviderRegistry(config)
+    this.projectRoot = options.projectRoot
+    this.browseRoot = options.browseRoot ?? os.homedir()
+    this.settings = new Settings(this.config)
+    const skills = discoverSkills(defaultRoots(options.projectRoot))
+    const groups = groupSkills(skills)
+    this.skillTools = createSkillTools(groups, skills)
+    this.skillCatalog = renderGroupIndex(groups)
+    this.preview = new PreviewServer(options.projectRoot)
+    this.preview.on("reload", () => this.hub.send({ type: "reload" }))
+    this.extraRoots = options.extraRoots ?? []
+    const preset = options.token?.trim()
+    this.token =
+      preset && /^[a-f0-9]{64}$/i.test(preset) ? preset : crypto.randomBytes(32).toString("hex")
+    const siblings = listWebInstances(options.projectRoot)
+    this.taskLabel =
+      options.taskLabel?.trim() ||
+      (siblings.length === 0 ? "Task 1" : nextTaskLabel(options.projectRoot))
+  }
+
+  get url(): string {
+    return `http://${this.options.host}:${this.options.port}`
+  }
+
+  /** The bound port. Useful when the port was chosen by the OS. */
+  get port(): number {
+    const address = this.server?.address()
+    if (address && typeof address !== "string") return address.port
+    return this.options.port
+  }
+
+  get loginUrl(): string {
+    return `${this.url}/?t=${this.token}`
+  }
+
+  async start(): Promise<void> {
+    this.permissionEngine = new PermissionEngine(this.config.permissions())
+    this.session = this.sessions.create(this.projectRoot)
+
+    this.server = http.createServer((request, response) => {
+      this.handle(request, response).catch((error) => {
+        response.writeHead(500, { "content-type": "application/json" })
+        response.end(JSON.stringify({ error: String(error) }))
+      })
+    })
+
+    await new Promise<void>((resolve, reject) => {
+      this.server!.once("error", reject)
+      this.server!.listen(this.options.port, this.options.host, () => resolve())
+    })
+
+    registerWebInstance({
+      host: this.options.host,
+      port: this.port,
+      projectRoot: this.projectRoot,
+      pid: process.pid,
+      label: this.taskLabel,
+      started: Date.now(),
+    })
+
+    // Picking the default model means querying every provider's catalog. Do it
+    // in the background so the server is reachable straight away.
+    void this.resolveModel()
+    void this.startMcp()
+  }
+
+  /** Start the MCP servers and collect their tools. */
+  private async startMcp(): Promise<void> {
+    const servers = this.config.mcpServers()
+    if (servers.length === 0) return
+    const mcp = new McpRegistry(servers)
+    this.mcp = mcp
+    try {
+      this.mcpTools = await mcp.start()
+      for (const problem of mcp.problems) {
+        this.hub.send({ type: "notice", text: `MCP: ${problem}` })
+      }
+      if (this.mcpTools.length > 0) {
+        this.hub.send({
+          type: "notice",
+          text: `${this.mcpTools.length} MCP tool(s) ready from ${mcp.connected.length} server(s)`,
+        })
+      }
+    } catch (error) {
+      log.warn(`mcp failed to start: ${redactError(error)}`)
+    }
+  }
+
+  private async resolveModel(): Promise<void> {
+    try {
+      const configured = this.config.get().defaultModel
+      const found = configured ? await this.registry.findModel(configured) : undefined
+      this.model = found ?? (await this.registry.defaultModel())
+      if (this.model) {
+        this.session.model = this.model.id
+        this.session.provider = this.model.providerID
+        this.hub.send({ type: "state", ...this.snapshot() })
+      }
+    } catch (error) {
+      log.warn(`could not resolve the default model: ${redactError(error)}`)
+    }
+  }
+
+  async stop(): Promise<void> {
+    unregisterWebInstance(this.options.host, this.port)
+    this.permissions.rejectAll("server stopped")
+    this.abort?.abort()
+    await this.mcp?.stop()
+    // The file watcher holds the event loop open if it is left running.
+    this.preview.disable()
+    for (const picker of this.pickers.values()) picker.child.kill()
+    this.pickers.clear()
+    await new Promise<void>((resolve) => this.server?.close(() => resolve()))
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* HTTP                                                              */
+  /* ---------------------------------------------------------------- */
+
+  private async handle(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+    const url = new URL(request.url ?? "/", this.url)
+
+    // The landing URL carries the token; hand it over as a cookie and clean up.
+    if (url.pathname === "/" && url.searchParams.get("t")) {
+      if (url.searchParams.get("t") !== this.token) {
+        response.writeHead(403, { "content-type": "text/plain" })
+        response.end("bad token")
+        return
+      }
+      response.writeHead(302, {
+        "set-cookie": `punani=${this.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`,
+        location: "/",
+      })
+      response.end()
+      return
+    }
+
+    // A pasted token is exchanged for the cookie before the gate, otherwise
+    // the gate would reject the very request that signs you in.
+    if (url.pathname === "/session") {
+      await this.acceptToken(request, response)
+      return
+    }
+
+    this.requestKeys = readBrowserKeys(request)
+
+    const denied = this.denied(request, url)
+    if (denied) {
+      // A browser hitting the page without a valid link gets a page that says
+      // what to do. An API caller gets a JSON error with a usable message.
+      if (url.pathname === "/" || url.pathname === "/index.html") {
+        this.sendHelp(response)
+        return
+      }
+      response.writeHead(denied, { "content-type": "application/json" })
+      response.end(
+        JSON.stringify({
+          error:
+            denied === 401
+              ? "unauthorized: open the private link that `punani web` printed in your terminal"
+              : "forbidden: this request came from another origin",
+        }),
+      )
+      return
+    }
+
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+      this.sendHtml(response)
+      return
+    }
+
+    if (url.pathname === "/api/events") {
+      this.sendEvents(request, response)
+      return
+    }
+
+    if (url.pathname === "/file") {
+      this.sendFile(response, url)
+      return
+    }
+
+    if (url.pathname === "/logo.png") {
+      this.sendLogo(response)
+      return
+    }
+
+    if (url.pathname === "/vendor/zustand.js") {
+      this.sendVendor(response)
+      return
+    }
+
+    if (url.pathname === "/preview/live") {
+      this.sendPreviewEvents(request, response)
+      return
+    }
+
+    if (url.pathname.startsWith("/preview/")) {
+      this.sendPreviewFile(response, url.pathname.slice("/preview".length))
+      return
+    }
+
+    if (url.pathname.startsWith("/api/")) {
+      await this.sendApi(request, response, url)
+      return
+    }
+
+    response.writeHead(404, { "content-type": "text/plain" })
+    response.end("not found")
+  }
+
+  /** The settings view, with the model counts filled in. */
+  private async settingsView(): Promise<unknown> {
+    const counts: Record<string, number> = {}
+    for (const provider of this.config.providers()) {
+      const { models } = await this.registry.models(provider)
+      counts[provider.id] = models.length
+    }
+    return this.settings.view(counts)
+  }
+
+  /**
+   * Open the native macOS folder chooser.
+   *
+   * The in-browser browser can only walk the home folder and the mounted
+   * volumes. The real chooser can reach anything the user has access to, on
+   * any drive, and it is what people expect.
+   */
+  private startFolderPicker(startAt?: string): string {
+    const id = `pick_${++this.pickerCounter}`
+    const prompt = "Select the project folder for Punani powerd"
+    const script = startAt
+      ? `POSIX path of (choose folder with prompt "${prompt}" default location POSIX file "${startAt.replace(/"/g, '\\"')}")`
+      : `POSIX path of (choose folder with prompt "${prompt}")`
+
+    const child = spawn("osascript", ["-e", script], { stdio: ["ignore", "pipe", "pipe"] })
+    const state = { child, path: undefined as string | undefined, done: false, cancelled: false }
+    this.pickers.set(id, state)
+
+    const out: Buffer[] = []
+    child.stdout?.on("data", (chunk) => out.push(chunk as Buffer))
+    child.on("error", () => {
+      state.done = true
+      state.cancelled = true
+    })
+    child.on("close", (code) => {
+      state.done = true
+      const chosen = Buffer.concat(out).toString("utf8").trim()
+      if (code === 0 && chosen) state.path = chosen
+      else state.cancelled = true
+    })
+    return id
+  }
+
+  private folderPickerStatus(id: string): { status: "waiting" | "done" | "cancelled" | "unknown"; path?: string } {
+    const state = this.pickers.get(id)
+    if (!state) return { status: "unknown" }
+    if (!state.done) return { status: "waiting" }
+    if (state.path) {
+      this.pickers.delete(id)
+      return { status: "done", path: state.path }
+    }
+    this.pickers.delete(id)
+    return { status: "cancelled" }
+  }
+
+  /** Serve a file from the project for the preview pane. */
+  private sendPreviewFile(response: http.ServerResponse, requestPath: string): void {
+    const resolved = this.preview.resolve(requestPath)
+    if (!resolved) {
+      response.writeHead(404, { "content-type": "text/plain" })
+      response.end("not found")
+      return
+    }
+    try {
+      const bytes = this.preview.read(resolved.file, resolved.type)
+      response.writeHead(200, {
+        "content-type": resolved.type,
+        "cache-control": "no-store",
+        // The preview must be able to load its own assets.
+        "access-control-allow-origin": "*",
+      })
+      response.end(bytes)
+    } catch {
+      response.writeHead(500, { "content-type": "text/plain" })
+      response.end("could not read the file")
+    }
+  }
+
+  /** The reload channel for the preview. */
+  private sendPreviewEvents(request: http.IncomingMessage, response: http.ServerResponse): void {
+    response.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+    })
+    response.write(": connected\n\n")
+    const unsubscribe = this.hub.subscribe((event) => {
+      if (event.type === "reload") response.write(`data: reload\n\n`)
+    })
+    const keepAlive = setInterval(() => response.write(": ping\n\n"), 20_000)
+    request.on("close", () => {
+      clearInterval(keepAlive)
+      unsubscribe()
+    })
+  }
+
+  /** The state library, served from the install directory. */
+  private sendVendor(response: http.ServerResponse): void {
+    try {
+      const bytes = fs.readFileSync(path.join(HERE, "vendor", "zustand.js"))
+      response.writeHead(200, {
+        "content-type": "text/javascript; charset=utf-8",
+        "cache-control": "public, max-age=3600",
+      })
+      response.end(bytes)
+    } catch {
+      response.writeHead(404, { "content-type": "text/plain" })
+      response.end("not found")
+    }
+  }
+
+  /** The mark. Served from the install directory, not the project. */
+  private sendLogo(response: http.ServerResponse): void {
+    try {
+      const bytes = fs.readFileSync(path.join(HERE, "logo.png"))
+      response.writeHead(200, {
+        "content-type": "image/png",
+        "cache-control": "public, max-age=86400",
+      })
+      response.end(bytes)
+    } catch {
+      response.writeHead(404, { "content-type": "text/plain" })
+      response.end("not found")
+    }
+  }
+
+  /**
+   * List the folders under a path, so a browser user can choose a project
+   * without touching a terminal. Only directories are listed, and only inside
+   * the browse root.
+   */
+  private browse(requested: string): {
+    path: string
+    parent: string | null
+    home: string
+    places: { name: string; path: string }[]
+    directories: { name: string; path: string }[]
+    error?: string
+  } {
+    const home = this.browseRoot
+    const roots = [home, ...this.extraRoots]
+    let target = requested ? path.resolve(home, requested) : home
+
+    // Clamp to whichever allowed root contains the target.
+    const inside = (root: string, candidate: string): boolean => {
+      const relative = path.relative(root, candidate)
+      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+    }
+    if (!roots.some((root) => inside(root, target))) {
+      const wanted = path.resolve("/" + requested.replace(/^[/~]+/, ""))
+      const matched = roots.find((root) => inside(root, wanted))
+      target = matched ? wanted : home
+    }
+
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(target)
+    } catch {
+      return {
+        path: target,
+        parent: null,
+        home,
+        places: this.places(),
+        directories: [],
+        error: "that folder does not exist",
+      }
+    }
+    if (!stat.isDirectory()) {
+      target = path.dirname(target)
+    }
+
+    let entries: fs.Dirent[] = []
+    try {
+      entries = fs.readdirSync(target, { withFileTypes: true })
+    } catch (error) {
+      return {
+        path: target,
+        parent: null,
+        home,
+        places: this.places(),
+        directories: [],
+        error: (error as Error).message,
+      }
+    }
+
+    const hidden = new Set([
+      "node_modules", ".git", ".hg", ".svn", "dist", "build", "out",
+      ".next", ".nuxt", ".cache", ".venv", "venv", "__pycache__",
+      "target", ".gradle", ".idea", ".vscode", "coverage", ".DS_Store",
+    ])
+
+    const directories = entries
+      .filter((entry) => entry.isDirectory() && !hidden.has(entry.name) && !entry.name.startsWith("."))
+      .map((entry) => ({ name: entry.name, path: path.join(target, entry.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+
+    // The parent link stops at the root of whichever place we are in.
+    const relativeParent = path.dirname(target)
+    const parent = roots.some((root) => inside(root, relativeParent)) ? relativeParent : null
+
+    return { path: target, parent, home, places: this.places(), directories }
+  }
+
+  /** The places the folder browser can start from: the home folder and any volumes. */
+  private places(): { name: string; path: string }[] {
+    const places = [{ name: "Home", path: this.browseRoot }]
+    for (const root of this.extraRoots) {
+      try {
+        if (!fs.statSync(root).isDirectory()) continue
+      } catch {
+        continue
+      }
+      places.push({ name: path.basename(root) || root, path: root })
+    }
+    return places
+  }
+
+  /** Switch the agent to a different project folder. */
+  private switchProject(requested: string): { ok: boolean; error?: string; project?: string } {
+    const target = requested.startsWith("/") ? path.resolve(requested) : path.resolve(this.browseRoot, requested)
+    try {
+      if (!fs.statSync(target).isDirectory()) {
+        return { ok: false, error: "that is not a folder" }
+      }
+    } catch {
+      return { ok: false, error: "that folder does not exist" }
+    }
+
+    this.projectRoot = target
+    this.preview.setProject(target)
+    this.session = this.sessions.create(target, this.model?.id, this.model?.providerID)
+    this.hub.send({ type: "state", ...this.snapshot() })
+    this.hub.send({ type: "notice", text: `project changed to ${target}` })
+    return { ok: true, project: target }
+  }
+
+  /**
+   * Serve a file from the project so generated images can be shown inline.
+   * The path is resolved and checked to be inside the project root, so this
+   * cannot be used to read files elsewhere on the machine.
+   */
+  private sendFile(response: http.ServerResponse, url: URL): void {
+    const requested = url.searchParams.get("path") ?? ""
+    const target = path.resolve(this.projectRoot, requested)
+    const relative = path.relative(this.projectRoot, target)
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      response.writeHead(403, { "content-type": "text/plain" })
+      response.end("forbidden")
+      return
+    }
+    let bytes: Buffer
+    try {
+      bytes = fs.readFileSync(target)
+    } catch {
+      response.writeHead(404, { "content-type": "text/plain" })
+      response.end("not found")
+      return
+    }
+    const type = target.endsWith(".png")
+      ? "image/png"
+      : target.endsWith(".jpg") || target.endsWith(".jpeg")
+        ? "image/jpeg"
+        : target.endsWith(".webp")
+          ? "image/webp"
+          : "application/octet-stream"
+    response.writeHead(200, { "content-type": type, "cache-control": "no-store" })
+    response.end(bytes)
+  }
+
+  /**
+   * Exchange a pasted token for the session cookie.
+   *
+   * The private link is the normal way in, but a landing page that links to
+   * the app has no way to know the token. This lets a person paste it.
+   */
+  private async acceptToken(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+    if (request.method !== "POST") {
+      response.writeHead(405, { "content-type": "application/json" })
+      response.end(JSON.stringify({ error: "use POST" }))
+      return
+    }
+    const body = await readJson(request)
+    const token = String(body.token ?? "").trim()
+    if (token !== this.token) {
+      response.writeHead(401, { "content-type": "application/json" })
+      response.end(JSON.stringify({ error: "that token was not accepted" }))
+      return
+    }
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "set-cookie": `punani=${this.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`,
+    })
+    response.end(JSON.stringify({ ok: true }))
+  }
+
+  /** A plain page explaining what to do when the link is missing or stale. */
+  private sendHelp(response: http.ServerResponse): void {
+    response.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+    response.end(`<!doctype html><meta charset="utf-8">
+<title>Punani powerd — sign in</title>
+<style>
+  body{background:#000;color:#ece4d2;font:15px/1.65 "Avenir Next",-apple-system,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0}
+  div{max-width:520px;padding:32px}
+  h1{font:400 30px/1.2 Didot,"Bodoni 72",Baskerville,Georgia,serif;margin:0 0 14px}
+  p{color:#9a927f}
+  form{display:flex;gap:9px;margin:22px 0 12px;flex-wrap:wrap}
+  input{flex:1;min-width:220px;background:#0c0b09;border:1px solid rgba(204,180,120,.16);color:#ece4d2;border-radius:999px;padding:13px 18px;font:14px/1 ui-monospace,Menlo,monospace}
+  input:focus{outline:none;border-color:rgba(204,180,120,.4)}
+  button{background:#ccb478;border:1px solid #ccb478;color:#120f07;border-radius:999px;padding:13px 24px;font:600 13px/1 inherit;cursor:pointer}
+  code{background:#17140e;border:1px solid rgba(204,180,120,.12);border-radius:5px;padding:2px 7px;font:13px ui-monospace,Menlo,monospace;color:#ccb478}
+  a{color:#ccb478}
+  .err{color:#d4674f;font:13px ui-monospace,Menlo,monospace;margin-top:10px}
+  .note{margin-top:28px;padding-top:18px;border-top:1px solid rgba(204,180,120,.12);font-size:13px}
+</style>
+<div>
+  <h1>Punani powerd</h1>
+  <p>This interface needs the private link that <code>punani web</code> printed in your terminal.
+     You can paste the token here instead of hunting for the link.</p>
+  <form id="f">
+    <input id="t" placeholder="paste the token" autocomplete="off" spellcheck="false" />
+    <button type="submit">Sign in</button>
+  </form>
+  <p style="font:13px ui-monospace,Menlo,monospace">The token is the part after <code>?t=</code> in the link. Run <code>punani web --open</code> to open the signed-in link automatically.</p>
+  <p class="err" id="e" hidden>That token was not accepted. Copy it again from the terminal.</p>
+  <p class="note">This page is the <strong>local coding agent</strong> on port 4096. It does not use Clerk.
+     The email list and Clerk sign-up live on the <a href="http://localhost:3000#join">Punani AI landing page</a> (port 3000).</p>
+</div>
+<script>
+  document.getElementById("f").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const value = document.getElementById("t").value.trim();
+    if (!value) return;
+    const res = await fetch("/session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: value }),
+    });
+    if (res.ok) { location.href = "/"; return; }
+    document.getElementById("e").hidden = false;
+  });
+</script>`)
+  }
+
+  /**
+   * Token check plus an origin check against cross-site requests.
+   * Returns null when allowed, or the status code to refuse with.
+   */
+  private denied(request: http.IncomingMessage, url: URL): number | null {
+    const header = request.headers["x-punani-token"]
+    const cookie = parseCookie(request.headers.cookie ?? "")["punani"]
+    const query = url.searchParams.get("t")
+    const supplied = (Array.isArray(header) ? header[0] : header) ?? cookie ?? query
+    if (supplied !== this.token) return 401
+
+    // A request carrying an Origin header must come from this server.
+    const origin = request.headers.origin
+    if (origin) {
+      let originHost: string
+      try {
+        originHost = new URL(origin).host
+      } catch {
+        return 403
+      }
+      if (originHost !== url.host) return 403
+    }
+    return null
+  }
+
+  private sendHtml(response: http.ServerResponse): void {
+    const file = path.join(HERE, "ui.html")
+    try {
+      const html = fs.readFileSync(file, "utf8")
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy":
+          "default-src 'none'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline'; " +
+          "connect-src 'self'; img-src 'self' data:; media-src 'self'; font-src 'self'; " +
+          // The preview pane frames the project itself, and optionally a dev
+          // server the user is already running.
+          "frame-src 'self' http: https:",
+      })
+      response.end(html)
+    } catch {
+      response.writeHead(500, { "content-type": "text/plain" })
+      response.end("ui.html is missing from the install")
+    }
+  }
+
+  private sendEvents(request: http.IncomingMessage, response: http.ServerResponse): void {
+    response.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    })
+    response.write(": connected\n\n")
+
+    const write = (event: Record<string, unknown>): void => {
+      response.write(`data: ${JSON.stringify(event)}\n\n`)
+    }
+    const unsubscribe = this.hub.subscribe(write)
+    write({ type: "state", ...this.snapshot() })
+
+    const keepAlive = setInterval(() => response.write(": ping\n\n"), 25_000)
+    request.on("close", () => {
+      clearInterval(keepAlive)
+      unsubscribe()
+    })
+  }
+
+  private async sendApi(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    const route = url.pathname.replace("/api/", "")
+    const body = request.method === "POST" ? await readJson(request) : {}
+
+    switch (route) {
+      case "state":
+        return json(response, this.snapshot())
+      case "message":
+        return json(response, await this.startTurn(String(body.text ?? "")))
+      case "revert-user":
+        return json(response, this.revertLastUserMessage())
+      case "permission":
+        return json(response, this.answerPermission(body))
+      case "abort":
+        return json(response, this.requestAbort())
+      case "models":
+        return json(response, { models: await this.registry.allModels() })
+      case "model": {
+        const found = await this.registry.findModel(String(body.model ?? ""))
+        if (!found) return json(response, { error: `unknown model ${body.model}` }, 404)
+        this.model = found
+        this.config.setDefaultModel(String(body.model))
+        this.hub.send({ type: "state", ...this.snapshot() })
+        return json(response, { ok: true, model: found })
+      }
+      case "sessions":
+        return json(response, { sessions: this.sessions.list() })
+      case "resume":
+        return json(response, this.resume(String(body.id ?? "")))
+      case "history":
+        return json(response, { messages: this.messages })
+      case "providers":
+        return json(response, { providers: await this.registry.status() })
+      case "browse":
+        return json(response, this.browse(String(url.searchParams.get("path") ?? "")))
+      case "pick-folder": {
+        // Start the native chooser and hand back an id to poll.
+        const id = this.startFolderPicker(body.startAt ? String(body.startAt) : undefined)
+        return json(response, { id })
+      }
+      case "pick-folder-status":
+        return json(response, this.folderPickerStatus(String(url.searchParams.get("id") ?? "")))
+      case "settings":
+        return json(response, await this.settingsView())
+      case "settings-key": {
+        const result = this.settings.setKey(String(body.provider ?? ""), String(body.key ?? ""))
+        if (result.ok) this.hub.send({ type: "notice", text: `key stored for ${body.provider}` })
+        return json(response, result, result.ok ? 200 : 400)
+      }
+      case "settings-key-clear": {
+        this.settings.clearKey(String(body.provider ?? ""))
+        this.hub.send({ type: "notice", text: `key removed for ${body.provider}` })
+        return json(response, { ok: true })
+      }
+      case "settings-provider": {
+        const result = this.settings.setProvider(body)
+        return json(response, result, result.ok ? 200 : 400)
+      }
+      case "settings-provider-remove": {
+        this.settings.removeProvider(String(body.id ?? ""))
+        return json(response, { ok: true })
+      }
+      case "settings-image": {
+        const result = this.settings.setImage(body)
+        return json(response, result, result.ok ? 200 : 400)
+      }
+      case "settings-audio": {
+        const result = this.settings.setAudio(body)
+        return json(response, result, result.ok ? 200 : 400)
+      }
+      case "settings-mcp": {
+        const result = this.settings.setMcp(body.servers)
+        return json(response, result, result.ok ? 200 : 400)
+      }
+      case "settings-model": {
+        this.settings.setDefaultModel(body.model ? String(body.model) : undefined)
+        return json(response, { ok: true })
+      }
+      case "settings-voices": {
+        const { listVoices } = await import("../provider/elevenlabs.js")
+        try {
+          const voices = await listVoices(body.key ? String(body.key) : undefined)
+          return json(response, { voices })
+        } catch (error) {
+          return json(response, { error: (error as Error).message }, 400)
+        }
+      }
+      case "preview": {
+        const mode = String(body.mode ?? "off")
+        if (mode === "static" || mode === "url") {
+          this.preview.enable(mode, body.url ? String(body.url) : undefined)
+        } else {
+          this.preview.disable()
+        }
+        this.hub.send({ type: "preview", ...this.preview.state() })
+        return json(response, { ok: true, ...this.preview.state() })
+      }
+      case "project":
+        return json(response, this.switchProject(String(body.path ?? "")))
+      case "task-windows":
+        return json(response, {
+          current: { port: this.port, host: this.options.host, label: this.taskLabel, url: this.url },
+          windows: listWebInstances(this.projectRoot),
+        })
+      case "task-window":
+        return json(response, await this.openAnotherTaskWindow())
+      default:
+        return json(response, { error: "unknown route" }, 404)
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Agent                                                             */
+  /* ---------------------------------------------------------------- */
+
+  private snapshot(): Record<string, unknown> {
+    const info = describeProject(this.projectRoot)
+    const devPreview = devPreviewTargets(this.projectRoot)
+    return {
+      session: this.session,
+      model: this.model,
+      project: this.projectRoot,
+      projectInfo: info,
+      devPreview,
+      taskLabel: this.taskLabel,
+      taskPort: this.port,
+      taskWindows: listWebInstances(this.projectRoot),
+      busy: this.busy,
+      pending: this.permissions.list(),
+      providers: this.config.providers().map((provider) => ({ id: provider.id, name: provider.name })),
+      preview: this.preview.state(),
+      mcp: {
+        servers: this.config.mcpServers().map((server) => ({ name: server.name, enabled: server.enabled !== false })),
+        connected: this.mcp?.connected ?? [],
+        tools: this.mcpTools.length,
+      },
+    }
+  }
+
+  private async startTurn(text: string): Promise<unknown> {
+    if (!text.trim()) return { error: "empty message" }
+
+    if (this.busy) {
+      this.messageQueue.push(text.trim())
+      this.hub.send({ type: "user", text: text.trim(), queued: true })
+      this.hub.send({
+        type: "notice",
+        text: `Follow-up queued (${this.messageQueue.length}). It will run when the current turn finishes.`,
+      })
+      return { ok: true, queued: true, queueLength: this.messageQueue.length }
+    }
+
+    if (!this.model) {
+      const msg = "no model is configured yet. Pick one in the model picker."
+      this.hub.send({ type: "notice", text: msg })
+      return { error: msg }
+    }
+    const provider = this.registry.providers().find((entry) => entry.id === this.model!.providerID)
+    if (!provider) {
+      const msg = `provider ${this.model.providerID} is not configured`
+      this.hub.send({ type: "notice", text: msg })
+      return { error: msg }
+    }
+    const { key } = this.registry.keyFor(provider)
+    if (!key && !this.requestKeys[provider.id] && !provider.anonymous) {
+      const msg = `no API key for ${provider.id}. Add one in Settings or run punani --init.`
+      this.hub.send({ type: "notice", text: msg })
+      return { error: msg }
+    }
+
+    this.abortEpoch++
+    this.busy = true
+    this.abort = new AbortController()
+    this.hub.send({ type: "state", ...this.snapshot() })
+    this.hub.send({ type: "user", text })
+
+    this.sessions.append(this.session, { role: "user", content: text, timestamp: Date.now() })
+    this.messages.push({ role: "user", content: text })
+
+    // The turn runs in the background. Everything it produces arrives over the
+    // event stream, so the request that started it can return immediately.
+    void this.runTurn(provider, key)
+    return { ok: true }
+  }
+
+  private async runTurn(provider: any, key: string | undefined): Promise<void> {
+    try {
+      await this.executeTurn(provider, key)
+    } catch (error) {
+      this.hub.send({
+        type: "error",
+        title: "Agent failed",
+        message: error instanceof Error ? error.message : String(error),
+        remedy: "Check the provider settings, then try again.",
+        suggestions: await this.suggestions(),
+      })
+      this.busy = false
+      this.abort = undefined
+      this.hub.send({ type: "state", ...this.snapshot() })
+      this.drainMessageQueue()
+    }
+  }
+
+  private async executeTurn(provider: any, key: string | undefined): Promise<void> {
+    const tools = [
+      ...buildTools(this.config.imageSettings(), this.config.audioSettings(), this.mcpTools),
+      ...this.skillTools,
+    ]
+    // A key the browser sent wins over the one on disk, so the browser can
+    // hold a key the server never sees.
+    const effectiveKey = key ?? this.requestKeys[provider.id]
+    const client = new LlmClient({
+      baseURL: provider.baseURL,
+      apiKey: effectiveKey,
+      providerID: provider.id,
+      headers: this.config.headers(provider.id),
+    })
+
+    const context: ToolContext = {
+      projectRoot: this.projectRoot,
+      requestPermission: (request) =>
+        resolvePermission(this.permissionEngine, request, async (pending) => {
+          const { id, promise } = this.permissions.create(pending)
+          this.hub.send({
+            type: "permission",
+            id,
+            action: pending.action,
+            resource: pending.resource,
+            summary: pending.summary,
+            detail: pending.detail,
+            destructive: pending.destructive === true,
+            alwaysPatterns: pending.alwaysPatterns,
+          })
+          return await promise
+        }),
+      notify: (message: string) => this.hub.send({ type: "notice", text: message }),
+      previewDiff: (file: string, before: string, after: string) => {
+        const result = diffLines(before, after)
+        this.hub.send({
+          type: "diff",
+          id: this.currentToolId,
+          path: file,
+          additions: result.additions,
+          deletions: result.deletions,
+          lines: result.lines.map((line) => ({
+            kind: line.kind,
+            text: line.text,
+            oldLine: line.oldLine,
+            newLine: line.newLine,
+          })),
+        })
+      },
+      mutate: diskMutate,
+      signal: this.abort?.signal,
+    }
+
+    const imageSettings = this.config.imageSettings()
+    const audioSettings = this.config.audioSettings()
+    const system = buildSystemPrompt(
+      this.projectRoot,
+      {
+        image: imageSettings.provider !== "none",
+        audio: audioSettings.provider !== "none",
+        vision: this.model?.vision === true,
+      },
+      this.skillCatalog,
+    )
+    const result = await runAgentTurn(
+      {
+        client,
+        model: this.model!,
+        tools,
+        projectRoot: this.projectRoot,
+        context,
+        signal: this.abort?.signal,
+        onEvent: (event) => {
+          if (event.type === "assistant_text" && event.text) {
+            this.hub.send({ type: "assistant", text: event.text, delta: event.partial === true })
+          }
+          if (event.type === "reasoning" && event.text) {
+            this.hub.send({ type: "reasoning", text: event.text })
+          }
+          if (event.type === "tool_start") {
+            this.currentToolId = event.toolCallId
+            this.hub.send({ type: "tool_start", tool: event.tool, id: event.toolCallId, args: event.args })
+          }
+          if (event.type === "tool_end" && event.result) {
+            this.currentToolId = undefined
+            this.hub.send({
+              type: "tool_end",
+              tool: event.tool,
+              id: event.toolCallId,
+              output: event.result.output,
+              isError: event.result.isError === true,
+              meta: event.result.meta,
+            })
+          }
+        },
+      },
+      [{ role: "system", content: system }, ...this.messages],
+    )
+
+    if (result.error) {
+      this.hub.send({
+        type: "error",
+        title: result.error.title,
+        message: result.error.message,
+        remedy: result.error.remedy,
+        hint: result.error.hint,
+        ...(await this.suggestions()),
+      })
+    }
+
+    for (const message of result.messages) {
+      if (message.role === "system") continue
+      if (message.role === "assistant") {
+        const calls = message.toolCalls ?? []
+        if (!messageText(message).trim() && calls.length === 0) continue
+        this.sessions.append(this.session, {
+          role: "assistant",
+          content: messageText(message),
+          toolCalls: calls.map((call) => ({ id: call.id, name: call.name, arguments: call.arguments })),
+          model: this.model!.id,
+          provider: this.model!.providerID,
+          tokensIn: result.usage.inputTokens,
+          tokensOut: result.usage.outputTokens,
+          cost: result.usage.cost,
+          timestamp: Date.now(),
+        })
+      } else if (message.role === "tool") {
+        this.sessions.append(this.session, {
+          role: "tool",
+          content: messageText(message),
+          tool: message.name,
+          toolCallId: message.toolCallId,
+          timestamp: Date.now(),
+        })
+      }
+    }
+
+    this.messages = result.messages.filter((message) => message.role !== "system")
+
+    if (this.revertAfterAbort && result.stoppedReason === "aborted") {
+      this.revertAfterAbort = false
+      const reverted = this.applyRevertLastUser()
+      this.busy = false
+      this.abort = undefined
+      this.hub.send({
+        type: "done",
+        stoppedReason: "aborted",
+        usage: result.usage,
+      })
+      this.hub.send({ type: "state", ...this.snapshot() })
+      if (reverted.ok && reverted.text) {
+        this.hub.send({ type: "revert", text: reverted.text })
+      }
+      this.drainMessageQueue()
+      return
+    }
+
+    this.busy = false
+    this.abort = undefined
+    this.hub.send({
+      type: "done",
+      stoppedReason: result.stoppedReason,
+      usage: result.usage,
+    })
+    this.hub.send({ type: "state", ...this.snapshot() })
+    this.drainMessageQueue()
+  }
+
+  private drainMessageQueue(): void {
+    const next = this.messageQueue.shift()
+    if (next) void this.startTurn(next)
+  }
+
+  private requestAbort(): { ok: true } {
+    this.abortEpoch++
+    const epoch = this.abortEpoch
+    this.abort?.abort()
+    this.permissions.rejectAll("cancelled by the user")
+    if (this.busy) {
+      this.hub.send({ type: "notice", text: "Stopping…" })
+      setTimeout(() => {
+        if (epoch !== this.abortEpoch || !this.busy) return
+        this.busy = false
+        this.abort = undefined
+        this.hub.send({
+          type: "done",
+          stoppedReason: "aborted",
+          usage: { inputTokens: 0, outputTokens: 0, cost: 0 },
+        })
+        this.hub.send({ type: "state", ...this.snapshot() })
+        this.hub.send({ type: "notice", text: "Run stopped." })
+        this.drainMessageQueue()
+      }, 4000)
+    }
+    return { ok: true }
+  }
+
+  private revertLastUserMessage(): { ok: boolean; text?: string; error?: string; pending?: boolean } {
+    if (this.busy) {
+      this.revertAfterAbort = true
+      this.messageQueue.length = 0
+      this.abort?.abort()
+      this.permissions.rejectAll("message reverted")
+      return { ok: true, pending: true }
+    }
+    return this.applyRevertLastUser()
+  }
+
+  private applyRevertLastUser(): { ok: boolean; text?: string; error?: string } {
+    let idx = -1
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i]!.role === "user") {
+        idx = i
+        break
+      }
+    }
+    if (idx < 0) return { ok: false, error: "no user message to revert" }
+
+    const text = messageText(this.messages[idx]!)
+    this.messages = this.messages.slice(0, idx)
+
+    const stored = this.sessions.read(this.session.id)
+    if (stored) {
+      let storedIdx = -1
+      for (let i = stored.messages.length - 1; i >= 0; i--) {
+        if (stored.messages[i]!.role === "user") {
+          storedIdx = i
+          break
+        }
+      }
+      if (storedIdx >= 0) {
+        this.sessions.rewrite(this.session, stored.messages.slice(0, storedIdx))
+      }
+    }
+
+    this.hub.send({ type: "history", messages: this.historyForClient() })
+    return { ok: true, text }
+  }
+
+  private async openAnotherTaskWindow(): Promise<Record<string, unknown>> {
+    const spawned = await spawnTaskWindow({
+      projectRoot: this.projectRoot,
+      host: this.options.host,
+    })
+    if (!spawned.ok) return spawned
+    this.hub.send({
+      type: "notice",
+      text: `${spawned.label} started on port ${spawned.port}. Each task window has its own agent — avoid two tasks editing the same files at once.`,
+    })
+    return { ...spawned }
+  }
+
+  private historyForClient(): { role: string; content: string }[] {
+    return this.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: messageText(m) }))
+      .filter((m) => m.content.trim())
+  }
+
+  private async suggestions(): Promise<{ list: string[]; costs: Record<string, string> }> {
+    if (!this.model) return { list: [], costs: {} }
+    const alternatives = await this.registry.alternatives(this.model)
+    const list: string[] = []
+    const costs: Record<string, string> = {}
+    for (const model of alternatives) {
+      const key = `${model.providerID}/${model.id}`
+      list.push(key)
+      costs[key] =
+        model.cost.input === 0 && model.cost.output === 0
+          ? "free"
+          : `$${model.cost.input}/$${model.cost.output} per 1M`
+    }
+    return { list, costs }
+  }
+
+  private answerPermission(body: any): { ok: boolean; error?: string } {
+    const id = String(body.id ?? "")
+    const reply = String(body.reply ?? "reject")
+    const message = typeof body.message === "string" ? body.message : undefined
+
+    // The id is assigned when the request is queued; the browser gets it there.
+    const entry = this.permissions.list().find((item) => item.id === id)
+    if (!entry) return { ok: false, error: "unknown permission" }
+
+    const granted = reply === "once" || reply === "always"
+    const remember = reply === "always"
+    const ok = this.permissions.reply(id, { granted, remember, message })
+    return ok ? { ok: true } : { ok: false, error: "unknown permission" }
+  }
+
+  private resume(id: string): { ok: boolean; error?: string } {
+    const stored = this.sessions.read(id)
+    if (!stored) return { ok: false, error: "no such session" }
+    this.session = stored.meta
+    this.messages = toChatMessages(stored.messages)
+    this.hub.send({ type: "state", ...this.snapshot() })
+    this.hub.send({ type: "history", messages: this.messages })
+    return { ok: true }
+  }
+}
+
+/**
+ * The keys the browser kept in its own storage, sent on every request.
+ * They are used for that request only and are never written to disk.
+ */
+function readBrowserKeys(request: http.IncomingMessage): Record<string, string> {
+  const header = request.headers["x-punani-keys"]
+  const raw = Array.isArray(header) ? header[0] : header
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object") return {}
+    const out: Record<string, string> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string" && value.length > 0) out[key] = value
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function json(response: http.ServerResponse, payload: unknown, status = 200): void {
+  response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" })
+  response.end(JSON.stringify(payload))
+}
+
+async function readJson(request: http.IncomingMessage): Promise<any> {
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(chunk as Buffer)
+  if (chunks.length === 0) return {}
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+  } catch {
+    return {}
+  }
+}
+
+function parseCookie(header: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const part of header.split(";")) {
+    const index = part.indexOf("=")
+    if (index === -1) continue
+    out[part.slice(0, index).trim()] = part.slice(index + 1).trim()
+  }
+  return out
+}

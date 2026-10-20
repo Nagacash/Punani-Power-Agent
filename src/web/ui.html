@@ -1,0 +1,2230 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Punani powerd</title>
+    <link rel="icon" href="/logo.png" />
+    <style>
+      /* ------------------------------------------------------------------
+         Palette derived from the mark: pure black and antique gold.
+         ------------------------------------------------------------------ */
+      :root {
+        --ink: #000000;
+        --void: #060505;
+        --surface: #0c0b09;
+        --raised: #12100c;
+        --shell: #17140e;
+        --hair: rgba(204, 180, 120, 0.14);
+        --hair-soft: rgba(204, 180, 120, 0.07);
+        --gold: #ccb478;
+        --gold-bright: #e6d5a4;
+        --gold-dim: #8a7746;
+        --gold-deep: #4a3f24;
+        --paper: #ece4d2;
+        --paper-dim: #9a927f;
+        --paper-faint: #5f5a4c;
+        --danger: #d4674f;
+        --ok: #7fb069;
+        --warn: #ccb478;
+        --ease: cubic-bezier(0.32, 0.72, 0, 1);
+        --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+        --sans: "Avenir Next", "SF Pro Display", ui-sans-serif, system-ui, sans-serif;
+        --mono: "SF Mono", "JetBrains Mono", "Menlo", monospace;
+        --serif: "Didot", "Bodoni 72", "Baskerville", "Playfair Display", Georgia, serif;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        background: var(--ink);
+        color: var(--paper);
+        font: 15px/1.65 var(--sans);
+        -webkit-font-smoothing: antialiased;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* A single warm bloom, fixed, never scrolling. */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        background:
+          radial-gradient(900px 480px at 78% -8%, rgba(204, 180, 120, 0.07), transparent 62%),
+          radial-gradient(700px 420px at 8% 104%, rgba(204, 180, 120, 0.045), transparent 60%);
+      }
+      /* Fine grain, fixed, non-interactive. */
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 60;
+        opacity: 0.028;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/></filter><rect width='140' height='140' filter='url(%23n)'/></svg>");
+      }
+
+      /* ------------------------------------------------------------------
+         Header island
+         ------------------------------------------------------------------ */
+      header {
+        position: relative;
+        z-index: 20;
+        margin: 18px auto 0;
+        width: min(1560px, calc(100% - 40px));
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 10px 10px 10px 18px;
+        border-radius: 999px;
+        background: rgba(12, 11, 9, 0.82);
+        border: 1px solid var(--hair);
+        box-shadow:
+          inset 0 1px 0 rgba(230, 213, 164, 0.06),
+          0 22px 48px -28px rgba(0, 0, 0, 0.9);
+      }
+      .mark { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .mark img {
+        width: 34px; height: 40px; object-fit: contain;
+        filter: drop-shadow(0 0 10px rgba(204, 180, 120, 0.28));
+        transition: transform 700ms var(--ease), filter 700ms var(--ease);
+      }
+      body.busy .mark img { filter: drop-shadow(0 0 18px rgba(204, 180, 120, 0.5)); transform: scale(1.04); }
+      .wordmark { display: flex; flex-direction: column; line-height: 1; }
+      .wordmark .name {
+        font: 600 15px/1 var(--serif);
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--paper);
+      }
+      .wordmark .by {
+        margin-top: 5px;
+        font: 500 9px/1 var(--mono);
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: var(--gold-dim);
+      }
+      .sep { width: 1px; height: 26px; background: var(--hair); flex: 0 0 auto; }
+      .status { display: flex; align-items: center; gap: 9px; font: 12px/1 var(--mono); color: var(--paper-dim); flex: 1; min-width: 0; }
+      .lamp {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: var(--gold-dim);
+        box-shadow: 0 0 0 0 rgba(204, 180, 120, 0.4);
+        flex: 0 0 auto;
+        transition: background 500ms var(--ease);
+      }
+      body.busy .lamp { background: var(--gold); animation: breathe 1.6s var(--ease) infinite; }
+      @keyframes breathe {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(204, 180, 120, 0.45); }
+        60% { box-shadow: 0 0 0 7px rgba(204, 180, 120, 0); }
+      }
+      .status .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+      header .actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+
+      /* ------------------------------------------------------------------
+         Controls — pill islands, magnetic
+         ------------------------------------------------------------------ */
+      .pill {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 8px 14px; border-radius: 999px;
+        background: var(--raised);
+        border: 1px solid var(--hair);
+        color: var(--paper);
+        font: 500 12px/1 var(--mono);
+        letter-spacing: 0.02em;
+        cursor: pointer;
+        transition: transform 400ms var(--ease), border-color 400ms var(--ease), background 400ms var(--ease), color 400ms var(--ease);
+      }
+      .pill:hover:not(:disabled) { border-color: rgba(204, 180, 120, 0.32); background: #17140e; }
+      .pill:active:not(:disabled) { transform: scale(0.97); }
+      .pill:disabled { opacity: 0.38; cursor: not-allowed; }
+      .pill .orb {
+        width: 20px; height: 20px; border-radius: 50%;
+        display: grid; place-items: center;
+        background: rgba(204, 180, 120, 0.1);
+        font-size: 10px; color: var(--gold);
+        transition: transform 500ms var(--ease), background 500ms var(--ease);
+      }
+      .pill:hover:not(:disabled) .orb { transform: translate(2px, -1px) scale(1.08); background: rgba(204, 180, 120, 0.2); }
+      .pill.gold { background: var(--gold); border-color: var(--gold); color: #120f07; font-weight: 600; }
+      .pill.gold:hover:not(:disabled) { background: var(--gold-bright); }
+      .pill.gold .orb { background: rgba(0, 0, 0, 0.16); color: #120f07; }
+      .pill.ghost { background: transparent; }
+      .pill.danger { color: var(--danger); border-color: rgba(212, 103, 79, 0.3); }
+      .pill.danger .orb { background: rgba(212, 103, 79, 0.12); color: var(--danger); }
+
+      select.pill {
+        appearance: none;
+        padding-right: 30px;
+        background-image: linear-gradient(45deg, transparent 50%, var(--gold-dim) 50%), linear-gradient(135deg, var(--gold-dim) 50%, transparent 50%);
+        background-position: calc(100% - 16px) 52%, calc(100% - 11px) 52%;
+        background-size: 5px 5px, 5px 5px;
+        background-repeat: no-repeat;
+        max-width: 340px;
+        text-overflow: ellipsis;
+      }
+      select.pill option { background: var(--surface); color: var(--paper); }
+
+      /* ------------------------------------------------------------------
+         Shell
+         ------------------------------------------------------------------ */
+      .shell {
+        position: relative; z-index: 10;
+        flex: 1; min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 330px;
+        gap: 22px;
+        width: min(1560px, calc(100% - 40px));
+        margin: 18px auto 0;
+        padding-bottom: 20px;
+      }
+      .col { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+      .feed {
+        flex: 1; min-height: 0; overflow-y: auto;
+        padding: 14px 6px 20px 0;
+        scrollbar-width: thin; scrollbar-color: var(--gold-deep) transparent;
+        -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 22px);
+        mask-image: linear-gradient(180deg, transparent 0, #000 22px);
+      }
+      .feed::-webkit-scrollbar { width: 8px; }
+      .feed::-webkit-scrollbar-thumb { background: var(--gold-deep); border-radius: 99px; }
+
+      /* ------------------------------------------------------------------
+         Rail — nested enclosures
+         ------------------------------------------------------------------ */
+      .rail { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding-bottom: 10px; scrollbar-width: thin; scrollbar-color: var(--gold-deep) transparent; }
+      .panel { border-radius: 24px; padding: 6px; background: rgba(23, 20, 14, 0.55); border: 1px solid var(--hair-soft); }
+      .panel > .core {
+        border-radius: 19px;
+        background: var(--surface);
+        border: 1px solid var(--hair);
+        box-shadow: inset 0 1px 0 rgba(230, 213, 164, 0.05);
+        padding: 16px 17px;
+      }
+      .panel h3 {
+        margin: 0 0 12px;
+        font: 600 9px/1 var(--mono);
+        letter-spacing: 0.26em;
+        text-transform: uppercase;
+        color: var(--gold-dim);
+      }
+      .kv { display: flex; justify-content: space-between; gap: 14px; padding: 5px 0; font: 12px/1.5 var(--mono); border-bottom: 1px solid var(--hair-soft); }
+      .kv:last-child { border-bottom: 0; }
+      .kv .k { color: var(--paper-faint); letter-spacing: 0.04em; }
+      .kv .v { color: var(--paper); text-align: right; word-break: break-word; }
+      .kv .v.path { display: block; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+      .kv .v.gold { color: var(--gold); }
+      .kv .v.good { color: var(--ok); }
+      .kv .v.bad { color: var(--danger); }
+
+      .providers { display: flex; flex-direction: column; gap: 7px; }
+      .prov { display: flex; align-items: center; gap: 9px; font: 12px/1 var(--mono); color: var(--paper-dim); }
+      .prov .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--gold-deep); flex: 0 0 auto; }
+      .prov.on .pip { background: var(--ok); }
+      .prov .id { color: var(--paper); }
+      .prov .n { margin-left: auto; color: var(--paper-faint); font-size: 11px; }
+
+      .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+      .gallery figure { margin: 0; border-radius: 12px; overflow: hidden; border: 1px solid var(--hair); background: #000; }
+      .gallery img, .gallery audio { width: 100%; display: block; }
+      .gallery audio { height: 34px; }
+      .gallery figcaption { padding: 6px 8px; font: 10px/1.4 var(--mono); color: var(--paper-faint); word-break: break-all; }
+      .gallery .none { grid-column: 1 / -1; color: var(--paper-faint); font: 11px/1.5 var(--mono); padding: 4px 0; }
+
+      /* ------------------------------------------------------------------
+         Messages
+         ------------------------------------------------------------------ */
+      .msg { margin: 0 0 18px; opacity: 0; transform: translateY(14px); animation: rise 720ms var(--ease-out) forwards; }
+      @keyframes rise { to { opacity: 1; transform: translateY(0); } }
+      .who {
+        display: flex; align-items: center; gap: 9px;
+        font: 600 9px/1 var(--mono);
+        letter-spacing: 0.26em; text-transform: uppercase;
+        color: var(--gold-dim);
+        margin: 0 0 8px 2px;
+      }
+      .who::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--hair), transparent); }
+      .msg.user .who { color: var(--paper-faint); }
+      .msg.assistant .who { color: var(--gold); }
+
+      .bubble { border-radius: 22px; padding: 5px; background: rgba(23, 20, 14, 0.5); border: 1px solid var(--hair-soft); }
+      .bubble > .core {
+        border-radius: 18px; padding: 15px 17px;
+        background: var(--surface); border: 1px solid var(--hair);
+        box-shadow: inset 0 1px 0 rgba(230, 213, 164, 0.05);
+        white-space: pre-wrap; word-break: break-word;
+        font-size: 14.5px; line-height: 1.7;
+      }
+      .msg.user .bubble { background: rgba(204, 180, 120, 0.07); border-color: var(--hair); }
+      .msg.user .bubble > .core { background: #100e0a; }
+      .msg-actions { display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; }
+      .msg-act {
+        border: 1px solid var(--hair); background: transparent; color: var(--paper-faint);
+        font: 11px/1 var(--sans); padding: 4px 10px; border-radius: 999px; cursor: pointer;
+      }
+      .msg-act:hover:not(:disabled) { border-color: rgba(204, 180, 120, 0.35); color: var(--paper); }
+      .msg-act:disabled { opacity: 0.35; cursor: not-allowed; }
+      .msg .queued { display: inline-block; margin-left: 8px; font: 10px/1 var(--sans); color: var(--gold); letter-spacing: 0.04em; text-transform: uppercase; }
+
+      .reason { margin: 0 0 16px; padding-left: 16px; border-left: 1px solid var(--gold-deep); }
+      .reason .who { color: var(--paper-faint); }
+      .reason .body { font: 12.5px/1.7 var(--mono); color: var(--paper-faint); white-space: pre-wrap; }
+
+      /* ------------------------------------------------------------------
+         Tool card
+         ------------------------------------------------------------------ */
+      .tool { margin: 0 0 14px; border-radius: 20px; padding: 5px; background: rgba(23, 20, 14, 0.45); border: 1px solid var(--hair-soft); }
+      .tool > .core { border-radius: 16px; background: var(--surface); border: 1px solid var(--hair); overflow: hidden; }
+      .tool .head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; }
+      .tool .head .name { font: 600 12px/1 var(--mono); color: var(--gold); letter-spacing: 0.06em; }
+      .tool .head .args { color: var(--paper-faint); font: 12px/1 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+      .tool .head .state { font: 10px/1 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--paper-faint); }
+      .tool.ok .head .state { color: var(--ok); }
+      .tool.err .head .state { color: var(--danger); }
+      .tool .out {
+        border-top: 1px solid var(--hair-soft);
+        padding: 11px 14px;
+        font: 12px/1.6 var(--mono); color: var(--paper-dim);
+        white-space: pre-wrap; word-break: break-word;
+        max-height: 280px; overflow-y: auto;
+      }
+      .tool.err .out { color: #d99a89; }
+
+      /* ------------------------------------------------------------------
+         Diff
+         ------------------------------------------------------------------ */
+      .diff { border-top: 1px solid var(--hair-soft); }
+      .diff .head { display: flex; align-items: center; gap: 12px; padding: 9px 14px; font: 11px/1 var(--mono); border-bottom: 1px solid var(--hair-soft); }
+      .diff .path { color: var(--paper); font-weight: 600; }
+      .diff .add { color: var(--ok); }
+      .diff .del { color: var(--danger); }
+      .diff pre { margin: 0; padding: 9px 0; font: 12px/1.6 var(--mono); overflow-x: auto; }
+      .diff .row { display: flex; gap: 12px; padding: 0 14px; white-space: pre; }
+      .diff .row .n { color: #3d382c; min-width: 4ch; text-align: right; user-select: none; flex: 0 0 auto; }
+      .diff .row.add { background: rgba(127, 176, 105, 0.1); color: #b6d6a8; }
+      .diff .row.del { background: rgba(212, 103, 79, 0.1); color: #e0a292; }
+      .diff .row.ctx { color: var(--paper-faint); }
+
+      .shot { border-top: 1px solid var(--hair-soft); padding: 12px 14px; }
+      .shot img { max-width: 100%; max-height: 440px; border-radius: 12px; display: block; border: 1px solid var(--hair); }
+      .shot audio { width: 100%; }
+      .shot .cap { margin-top: 8px; font: 10px/1.4 var(--mono); color: var(--paper-faint); word-break: break-all; }
+
+      /* ------------------------------------------------------------------
+         Permission — the loudest thing on screen
+         ------------------------------------------------------------------ */
+      .perm { margin: 0 0 16px; border-radius: 22px; padding: 6px; background: rgba(204, 180, 120, 0.09); border: 1px solid rgba(204, 180, 120, 0.28); }
+      .perm > .core { border-radius: 17px; background: #0e0c08; border: 1px solid rgba(204, 180, 120, 0.2); overflow: hidden; }
+      .perm .band {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 14px;
+        background: linear-gradient(90deg, rgba(204, 180, 120, 0.9), rgba(204, 180, 120, 0.55));
+        color: #14110a;
+        font: 700 9px/1 var(--mono); letter-spacing: 0.24em; text-transform: uppercase;
+      }
+      .perm .band .act { background: rgba(0, 0, 0, 0.2); border-radius: 999px; padding: 3px 9px; }
+      .perm .body { padding: 15px 16px 16px; }
+      .perm .sum { font: 14px/1.5 var(--mono); margin-bottom: 10px; word-break: break-word; }
+      .perm .danger { display: flex; align-items: center; gap: 8px; color: var(--danger); font: 600 12px/1.4 var(--sans); margin-bottom: 10px; }
+      .perm .detail { font: 12px/1.6 var(--mono); color: var(--paper-dim); white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
+      .perm .acts { display: flex; gap: 9px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
+      .perm .acts .grow { flex: 1; }
+      .perm input {
+        flex: 1; min-width: 180px;
+        background: #080706; border: 1px solid var(--hair); color: var(--paper);
+        border-radius: 999px; padding: 9px 15px; font: 12px/1 var(--mono);
+        transition: border-color 400ms var(--ease);
+      }
+      .perm input:focus { outline: none; border-color: rgba(204, 180, 120, 0.4); }
+
+      /* ------------------------------------------------------------------
+         Error
+         ------------------------------------------------------------------ */
+      .err { margin: 0 0 16px; border-radius: 20px; padding: 5px; background: rgba(212, 103, 79, 0.1); border: 1px solid rgba(212, 103, 79, 0.28); }
+      .err > .core { border-radius: 16px; background: #120a08; border: 1px solid rgba(212, 103, 79, 0.18); padding: 14px 16px; }
+      .err .title { color: var(--danger); font: 600 12px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 9px; }
+      .err .msg { font: 12.5px/1.65 var(--mono); color: #e0b0a4; word-break: break-word; }
+      .err .remedy { color: var(--paper-faint); font-size: 12.5px; margin-top: 9px; }
+      .err .sug { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+      .notice { color: var(--paper-faint); font: 12px/1.6 var(--mono); margin: 0 0 12px; }
+
+      /* ------------------------------------------------------------------
+         Composer island
+         ------------------------------------------------------------------ */
+      .composer { flex: 0 0 auto; margin-top: 14px; width: 100%;
+        border-radius: 26px; padding: 6px;
+        background: rgba(23, 20, 14, 0.72);
+        border: 1px solid var(--hair);
+        box-shadow: 0 26px 60px -30px rgba(0, 0, 0, 0.95), inset 0 1px 0 rgba(230, 213, 164, 0.06);
+      }
+      .composer > .core {
+        border-radius: 21px;
+        background: var(--surface);
+        border: 1px solid var(--hair);
+        display: flex; gap: 12px; align-items: flex-end;
+        padding: 9px 9px 9px 18px;
+      }
+      .composer textarea {
+        flex: 1; resize: none;
+        background: transparent; border: 0; color: var(--paper);
+        padding: 9px 0; font: 14.5px/1.6 var(--sans);
+        min-height: 42px; max-height: 210px;
+      }
+      .composer textarea:focus { outline: none; }
+      .composer textarea::placeholder { color: var(--paper-faint); }
+      .hint { margin: 10px 6px 0; color: var(--paper-faint); font: 10.5px/1.4 var(--mono); text-align: center; }
+      .hint kbd { border: 1px solid var(--hair); border-radius: 5px; padding: 1px 5px; color: var(--paper-dim); }
+
+      /* ------------------------------------------------------------------
+         Empty state
+         ------------------------------------------------------------------ */
+      .empty { display: grid; place-items: center; height: 100%; text-align: center; padding: 40px 20px; }
+      .empty .stack { max-width: 520px; }
+      .empty img { width: 92px; height: 108px; object-fit: contain; opacity: 0.95; filter: drop-shadow(0 10px 40px rgba(204, 180, 120, 0.18)); }
+      .empty h2 { margin: 26px 0 10px; font: 400 30px/1.25 var(--serif); letter-spacing: 0.02em; color: var(--paper); }
+      .empty p { margin: 0 auto; color: var(--paper-dim); font-size: 14px; max-width: 430px; }
+      .empty .tags { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 26px; }
+      .empty .tags span { font: 10px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold-dim); border: 1px solid var(--hair); border-radius: 999px; padding: 7px 13px; }
+
+      /* ------------------------------------------------------------------
+         Folder browser
+         ------------------------------------------------------------------ */
+      .veil {
+        position: fixed; inset: 0; z-index: 80;
+        background: rgba(0, 0, 0, 0.72);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        display: grid; place-items: center;
+        padding: 24px;
+        opacity: 0; pointer-events: none;
+        transition: opacity 420ms var(--ease);
+      }
+      .veil.open { opacity: 1; pointer-events: auto; }
+      .sheet {
+        width: min(640px, 100%);
+        max-height: min(70vh, 620px);
+        display: flex; flex-direction: column;
+        border-radius: 30px; padding: 7px;
+        background: rgba(23, 20, 14, 0.72);
+        border: 1px solid var(--hair);
+        box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.95);
+        transform: translateY(18px) scale(0.985);
+        transition: transform 520ms var(--ease);
+      }
+      .veil.open .sheet { transform: translateY(0) scale(1); }
+      .task-embed-sheet {
+        width: min(1200px, 100%);
+        max-height: min(92vh, 900px);
+        height: min(92vh, 900px);
+      }
+      .task-embed-sheet .top { flex-wrap: wrap; }
+      .task-embed-sheet .top h2 { flex: 1; min-width: 120px; }
+      #task-embed-frame {
+        flex: 1;
+        min-height: 0;
+        width: 100%;
+        border: 0;
+        background: #000;
+        border-radius: 0 0 20px 20px;
+      }
+      .sheet > .core {
+        border-radius: 24px; background: var(--surface);
+        border: 1px solid var(--hair);
+        box-shadow: inset 0 1px 0 rgba(230, 213, 164, 0.05);
+        display: flex; flex-direction: column; min-height: 0;
+      }
+      .sheet .top { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--hair-soft); }
+      .sheet .top h2 { margin: 0; font: 600 10px/1 var(--mono); letter-spacing: 0.26em; text-transform: uppercase; color: var(--gold-dim); flex: 0 0 auto; }
+      .sheet .crumb {
+        flex: 1; min-width: 0; font: 12px/1.4 var(--mono); color: var(--paper-dim);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .sheet .list { overflow-y: auto; padding: 8px; min-height: 120px; }
+      .folder {
+        display: flex; align-items: center; gap: 11px;
+        width: 100%; text-align: left;
+        padding: 11px 13px; border-radius: 13px;
+        background: transparent; border: 1px solid transparent;
+        color: var(--paper); font: 13px/1 var(--mono);
+        cursor: pointer;
+        transition: background 300ms var(--ease), border-color 300ms var(--ease), transform 300ms var(--ease);
+      }
+      .folder:hover { background: rgba(204, 180, 120, 0.07); border-color: var(--hair-soft); transform: translateX(3px); }
+      .folder .ico { color: var(--gold); font-size: 13px; flex: 0 0 auto; }
+      .folder .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sheet .foot { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-top: 1px solid var(--hair-soft); }
+      .sheet .foot input {
+        flex: 1; min-width: 0;
+        background: #080706; border: 1px solid var(--hair); color: var(--paper);
+        border-radius: 999px; padding: 9px 15px; font: 11.5px/1 var(--mono);
+        transition: border-color 400ms var(--ease);
+      }
+      .sheet .foot input:focus { outline: none; border-color: rgba(204, 180, 120, 0.4); }
+      .sheet .empty { padding: 22px 14px; text-align: center; color: var(--paper-faint); font: 12px/1.6 var(--mono); }
+      .sheet .places { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 14px 14px; border-top: 1px solid var(--hair-soft); }
+      .place {
+        display: inline-flex; align-items: center; gap: 7px;
+        padding: 7px 13px; border-radius: 999px;
+        background: rgba(204, 180, 120, 0.06);
+        border: 1px solid var(--hair-soft);
+        color: var(--paper-dim); font: 11px/1 var(--mono);
+        cursor: pointer;
+        transition: border-color 300ms var(--ease), color 300ms var(--ease), background 300ms var(--ease);
+      }
+      .place:hover { border-color: rgba(204, 180, 120, 0.32); color: var(--paper); background: rgba(204, 180, 120, 0.1); }
+      .place .ico { color: var(--gold); }
+
+      /* the project pill in the header */
+      .proj {
+        display: inline-flex; align-items: center; gap: 9px;
+        padding: 8px 14px; border-radius: 999px;
+        background: var(--raised); border: 1px solid var(--hair);
+        color: var(--paper); font: 500 12px/1 var(--mono);
+        cursor: pointer; max-width: 260px;
+        transition: border-color 400ms var(--ease), background 400ms var(--ease), transform 400ms var(--ease);
+      }
+      .proj:hover { border-color: rgba(204, 180, 120, 0.32); background: #17140e; }
+      .proj:active { transform: scale(0.98); }
+      .proj .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .proj .ico { color: var(--gold); flex: 0 0 auto; }
+
+      /* ------------------------------------------------------------------
+         Preview pane
+         ------------------------------------------------------------------ */
+      .shell.preview { grid-template-columns: minmax(0, 1fr) minmax(340px, 38%) 300px; }
+      .pane { display: none; min-width: 0; min-height: 0; flex-direction: column; }
+      .shell.preview .pane { display: flex; }
+      .pane .frame { flex: 1; min-height: 0; border-radius: 22px; padding: 6px; background: rgba(23, 20, 14, 0.55); border: 1px solid var(--hair-soft); }
+      .pane .frame > .core {
+        flex: 1; min-height: 0; border-radius: 17px; overflow: hidden;
+        background: #000; border: 1px solid var(--hair);
+        box-shadow: inset 0 1px 0 rgba(230, 213, 164, 0.05);
+        display: flex; flex-direction: column;
+      }
+      .pane .bar { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--hair-soft); flex: 0 0 auto; }
+      .pane .bar .url {
+        flex: 1; min-width: 0; font: 11.5px/1 var(--mono); color: var(--paper-dim);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        background: transparent; border: 0; padding: 4px 0;
+      }
+      .pane .bar .url:focus { outline: none; color: var(--paper); }
+      .pane iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: #000; }
+      .pane iframe[hidden], .pane .blank[hidden] { display: none; }
+      .pane .blank { flex: 1; display: grid; place-items: center; padding: 30px; text-align: center; }
+      .pane .blank p { color: var(--paper-faint); font: 12.5px/1.7 var(--mono); max-width: 340px; }
+      .pane .blank h4 { margin: 0 0 10px; font: 600 10px/1 var(--mono); letter-spacing: 0.24em; text-transform: uppercase; color: var(--gold-dim); }
+
+      @media (max-width: 1400px) {
+        .shell.preview { grid-template-columns: minmax(0, 1fr) minmax(320px, 40%); }
+        .shell.preview .rail { display: none; }
+      }
+      /* ------------------------------------------------------------------
+         Settings
+         ------------------------------------------------------------------ */
+      .sheet .tabs { display: flex; gap: 6px; padding: 14px 18px 0; flex-wrap: wrap; }
+      .tab {
+        padding: 8px 15px; border-radius: 999px;
+        background: transparent; border: 1px solid transparent;
+        color: var(--paper-faint); font: 600 10px/1 var(--mono);
+        letter-spacing: 0.18em; text-transform: uppercase; cursor: pointer;
+        transition: color 300ms var(--ease), background 300ms var(--ease), border-color 300ms var(--ease);
+      }
+      .tab:hover { color: var(--paper-dim); }
+      .tab.on { color: var(--gold); background: rgba(204, 180, 120, 0.1); border-color: rgba(204, 180, 120, 0.24); }
+      .sheet .panel-body { padding: 16px 18px 20px; overflow-y: auto; min-height: 200px; }
+      .row-card {
+        border-radius: 16px; padding: 12px 14px; margin-bottom: 10px;
+        background: var(--raised); border: 1px solid var(--hair-soft);
+      }
+      .row-card .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .row-card .nm { font: 600 12.5px/1 var(--mono); color: var(--paper); }
+      .row-card .sub { font: 11px/1.4 var(--mono); color: var(--paper-faint); margin-top: 5px; word-break: break-all; }
+      .row-card .grow { flex: 1; }
+      .tag { font: 9.5px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--hair-soft); color: var(--paper-faint); }
+      .tag.ok { color: var(--ok); border-color: rgba(127, 176, 105, 0.3); }
+      .tag.warn { color: var(--warn); border-color: rgba(204, 180, 120, 0.3); }
+      .sheet .field { display: flex; gap: 8px; margin-top: 11px; flex-wrap: wrap; }
+      .sheet .field input, .sheet .field select {
+        flex: 1; min-width: 140px;
+        background: #080706; border: 1px solid var(--hair); color: var(--paper);
+        border-radius: 10px; padding: 9px 13px; font: 12px/1 var(--mono);
+        transition: border-color 300ms var(--ease);
+      }
+      .sheet .field input:focus, .sheet .field select:focus { outline: none; border-color: rgba(204, 180, 120, 0.4); }
+      .sheet .hintline { color: var(--paper-faint); font: 11.5px/1.6 var(--mono); margin: 4px 0 12px; }
+      .sheet .list-pick { display: flex; flex-direction: column; gap: 5px; max-height: 190px; overflow-y: auto; margin-top: 10px; }
+      .sheet .list-pick button {
+        text-align: left; padding: 9px 12px; border-radius: 10px;
+        background: var(--raised); border: 1px solid var(--hair-soft);
+        color: var(--paper-dim); font: 11.5px/1.3 var(--mono); cursor: pointer;
+        transition: border-color 300ms var(--ease), color 300ms var(--ease);
+      }
+      .sheet .list-pick button:hover { border-color: rgba(204, 180, 120, 0.3); color: var(--paper); }
+      .sheet .saved { color: var(--ok); font: 11px/1 var(--mono); }
+
+      @media (max-width: 1080px) {
+        .shell { grid-template-columns: minmax(0, 1fr); }
+        .rail { display: none; }
+        .shell.preview { grid-template-columns: minmax(0, 1fr); }
+        .shell.preview .pane { display: none; }
+        .shell.preview.preview-mobile .pane { display: flex; }
+        .shell.preview.preview-mobile .col { display: none; }
+      }
+      @media (max-width: 640px) {
+        header { width: calc(100% - 24px); margin-top: 12px; padding: 8px 8px 8px 12px; gap: 10px; }
+        .shell { width: calc(100% - 24px); margin-top: 12px; }
+        .composer, .hint { width: 100%; }
+        .wordmark .by { display: none; }
+        .sep, .status { display: none; }
+        .empty h2 { font-size: 23px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="mark">
+        <img src="/logo.png" alt="" />
+        <div class="wordmark">
+          <span class="name">Punani</span>
+          <span class="by">powerd &middot; naga codex</span>
+        </div>
+      </div>
+      <button class="proj" id="proj" title="Change project"><span class="ico">◇</span><span class="nm" id="proj-name">…</span></button>
+      <div class="sep"></div>
+      <div class="status"><span class="lamp"></span><span class="txt" id="status">connecting…</span></div>
+      <div class="grow"></div>
+      <div class="actions">
+        <button class="pill" id="settings-toggle" title="Providers, media and MCP servers"><span class="orb">⚙</span>Settings</button>
+        <button class="pill ghost" id="new-task" title="Start another agent in this window (overlay, same project, runs in parallel)"><span class="orb">+</span>New task</button>
+        <select class="pill" id="task-switch" hidden title="Jump to another task window"></select>
+        <button class="pill ghost" id="dev-tab" hidden title="Show your dev site in the preview pane beside chat"><span class="orb">▣</span>Dev site</button>
+        <button class="pill" id="preview-toggle" title="Show a live preview beside the chat"><span class="orb">▣</span>Preview</button>
+        <select class="pill" id="model" title="Choose the model"></select>
+        <button class="pill ghost" id="stop" disabled><span class="orb">■</span>Stop</button>
+      </div>
+    </header>
+
+    <div class="shell" id="shell">
+      <div class="col">
+        <div class="feed" id="log">
+          <div class="empty" id="empty">
+            <div class="stack">
+              <img src="/logo.png" alt="" />
+              <h2>Punani powerd</h2>
+              <p>Ask for a change. You approve every write and every command before it runs, and every edit shows a diff first.</p>
+              <div class="tags"><span class="pill gold" id="empty-open" style="cursor:pointer"><span class="orb">◇</span>Open a project</span></div>
+              <div class="tags">
+                <span>read &middot; write &middot; edit</span>
+                <span>search &middot; run</span>
+                <span>image &middot; voice</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="core">
+            <textarea id="input" rows="1" placeholder="Describe a coding task…"></textarea>
+            <button class="pill gold" id="send"><span class="orb">↗</span>Send</button>
+          </div>
+        </div>
+        <div class="hint" id="composer-hint"><kbd>Enter</kbd> send &nbsp;·&nbsp; <kbd>Shift</kbd>+<kbd>Enter</kbd> newline &nbsp;·&nbsp; while running: <kbd>Stop</kbd>, <kbd>Esc</kbd>, or <kbd>Ctrl</kbd>+<kbd>C</kbd> (not in terminal)</div>
+      </div>
+
+      <div class="col pane" id="pane">
+        <div class="frame">
+          <div class="core">
+            <div class="bar">
+              <input class="url" id="preview-url" value="/preview/" spellcheck="false" />
+              <button class="pill ghost" id="preview-reload"><span class="orb">↻</span>Reload</button>
+              <button class="pill ghost" id="preview-external" title="Same URL in a full browser tab"><span class="orb">↗</span>Open in tab</button>
+              <button class="pill ghost" id="preview-popout" hidden title="Open dev server in a new tab"><span class="orb">⧉</span>Dev tab</button>
+            </div>
+            <div class="blank" id="preview-blank">
+              <div>
+                <h4>Preview</h4>
+                <p id="preview-blank-lede">Static sites: use Preview beside chat. Next.js and Vite: run <code>npm run dev</code>, then open a <b>Dev tab</b> or paste the local URL here.</p>
+                <div class="tags" id="preview-dev-links" hidden></div>
+              </div>
+            </div>
+            <iframe id="preview-frame" title="preview" hidden></iframe>
+          </div>
+        </div>
+      </div>
+
+      <aside class="rail">
+        <div class="panel">
+          <div class="core">
+            <h3>Model</h3>
+            <div class="kv"><span class="k">name</span><span class="v" id="r-model">—</span></div>
+            <div class="kv"><span class="k">provider</span><span class="v" id="r-provider">—</span></div>
+            <div class="kv"><span class="k">context</span><span class="v" id="r-ctx">—</span></div>
+            <div class="kv"><span class="k">tools</span><span class="v" id="r-tools">—</span></div>
+            <div class="kv"><span class="k">cost / 1M</span><span class="v gold" id="r-cost">—</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="core">
+            <h3>Session</h3>
+            <div class="kv"><span class="k">project</span><span class="v" id="r-project">—</span></div>
+            <div class="kv"><span class="k">directory</span><span class="v" id="r-dir">—</span></div>
+            <div class="kv"><span class="k">id</span><span class="v" id="r-session">—</span></div>
+            <div class="kv"><span class="k">tokens</span><span class="v" id="r-tokens">—</span></div>
+            <div class="kv"><span class="k">spent</span><span class="v gold" id="r-spent">—</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="core">
+            <h3>Providers</h3>
+            <div class="providers" id="r-providers"><span class="notice">loading…</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="core">
+            <h3>Media</h3>
+            <div class="gallery" id="r-media"><span class="none">nothing generated yet</span></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+
+    <div class="veil" id="settings-veil">
+      <div class="sheet">
+        <div class="core">
+          <div class="top">
+            <h2>Settings</h2>
+            <span class="crumb" id="settings-crumb"></span>
+            <button class="pill ghost" id="settings-close"><span class="orb">✕</span>Close</button>
+          </div>
+          <div class="tabs" id="settings-tabs">
+            <button class="tab on" data-tab="providers">Providers</button>
+            <button class="tab" data-tab="media">Media</button>
+            <button class="tab" data-tab="mcp">MCP</button>
+          </div>
+          <div class="panel-body" id="settings-body"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="veil task-embed" id="task-embed">
+      <div class="sheet task-embed-sheet">
+        <div class="core">
+          <div class="top">
+            <h2 id="task-embed-title">Task</h2>
+            <button class="pill ghost" id="task-embed-popout" title="Open this task in its own browser tab"><span class="orb">↗</span>Open in tab</button>
+            <button class="pill ghost" id="task-embed-close"><span class="orb">✕</span>Back</button>
+          </div>
+          <iframe id="task-embed-frame" title="Another Punani task"></iframe>
+        </div>
+      </div>
+    </div>
+
+    <div class="veil" id="veil">
+      <div class="sheet">
+        <div class="core">
+          <div class="top">
+            <h2>Open a project</h2>
+            <span class="crumb" id="crumb"></span>
+            <button class="pill ghost" id="veil-close"><span class="orb">✕</span>Close</button>
+          </div>
+          <div class="list" id="folders"></div>
+          <div class="places" id="places"></div>
+          <div class="foot">
+            <input id="path-input" placeholder="or type a path…" />
+            <button class="pill" id="up"><span class="orb">↑</span>Up</button>
+            <button class="pill" id="choose-here"><span class="orb">◇</span>Choose…</button>
+            <button class="pill gold" id="open-here"><span class="orb">↗</span>Open this folder</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="importmap">
+      { "imports": { "zustand/vanilla": "/vendor/zustand.js" } }
+    </script>
+
+    <script type="module">
+      window.addEventListener("error", (event) => {
+        document.title = "ERR: " + (event.message || event.error);
+        const box = document.getElementById("log");
+        if (box) box.insertAdjacentHTML("afterbegin", `<div class="err"><div class="core"><div class="title">Script error</div><div class="msg">${String(event.message || event.error)}</div></div></div>`);
+      });
+      import { createStore } from "zustand/vanilla";
+
+      const $ = (id) => document.getElementById(id);
+      const log = $("log");
+
+      /* ------------------------------------------------------------------
+         State
+         ------------------------------------------------------------------ */
+      const STORAGE_KEY = "punani.keys";
+
+      /** Keys the user chose to keep in the browser instead of on disk. */
+      function loadBrowserKeys() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          const parsed = raw ? JSON.parse(raw) : {};
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function saveBrowserKeys(keys) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(keys));
+        } catch {
+          /* private mode, or the quota is full */
+        }
+      }
+
+      const store = createStore((set, get) => ({
+        busy: false,
+        usage: { inputTokens: 0, outputTokens: 0, cost: 0 },
+        previewMode: "off",
+        settingsTab: "providers",
+        providerFilter: "",
+        browserKeys: loadBrowserKeys(),
+        models: [],
+        set,
+        get,
+      }));
+
+      const state = store.getState();
+      const setState = store.setState;
+      const subscribe = store.subscribe;
+
+      /** Every request carries the browser-held keys, so the server can use them. */
+      function apiFetch(path, options = {}) {
+        const headers = new Headers(options.headers || {});
+        const keys = store.getState().browserKeys;
+        if (Object.keys(keys).length > 0) {
+          headers.set("x-punani-keys", JSON.stringify(keys));
+        }
+        return fetch(path, { ...options, headers });
+      }
+
+      let busy = false;
+      let usage = { inputTokens: 0, outputTokens: 0, cost: 0 };
+
+      /** Put the cursor back in the composer, so typing works straight away. */
+      function focusComposer() {
+        const input = $("input");
+        if (!input || input.disabled) return;
+        try {
+          input.focus();
+        } catch {
+          /* no focus to give */
+        }
+      }
+
+      const esc = (s) =>
+        String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+      const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 90;
+      function scroll() { log.scrollTop = log.scrollHeight; }
+
+      function add(el) {
+        const stick = atBottom();
+        $("empty")?.remove();
+        log.appendChild(el);
+        if (stick) scroll();
+      }
+
+      function info(text) {
+        const n = document.createElement("div");
+        n.className = "notice";
+        n.textContent = String(text ?? "");
+        add(n);
+      }
+
+      async function stopRun() {
+        if (!busy) return;
+        await apiFetch("/api/abort", { method: "POST" });
+      }
+
+      function ctx(v) {
+        return String(v ?? "").trim();
+      }
+
+      function fmt(n) {
+        if (n === undefined || n === null) return "—";
+        if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+        if (n >= 1_000) return Math.round(n / 1_000) + "k";
+        return String(n);
+      }
+
+      let lastUserMsgEl = null;
+
+      function userMsg(text, opts = {}) {
+        const el = document.createElement("div");
+        el.className = "msg user";
+        el.innerHTML = `<div class="who">you</div><div class="bubble"><div class="core"></div></div>`;
+        const core = el.querySelector(".core");
+        core.textContent = text;
+        if (opts.queued) {
+          const tag = document.createElement("span");
+          tag.className = "queued";
+          tag.textContent = "queued";
+          core.appendChild(tag);
+        }
+        if (!opts.fromHistory) {
+          const actions = document.createElement("div");
+          actions.className = "msg-actions";
+          const edit = document.createElement("button");
+          edit.type = "button";
+          edit.className = "msg-act";
+          edit.textContent = "Edit";
+          edit.title = "Stop if needed, remove this prompt and replies after it, then edit";
+          edit.onclick = () => void revertAndEdit(edit);
+          actions.appendChild(edit);
+          el.querySelector(".bubble").appendChild(actions);
+        }
+        if (lastUserMsgEl) {
+          lastUserMsgEl.querySelector(".msg-act")?.remove();
+          lastUserMsgEl.querySelector(".msg-actions")?.remove();
+        }
+        lastUserMsgEl = el;
+        add(el);
+      }
+
+      async function revertAndEdit(button) {
+        if (button?.disabled) return;
+        if (button) button.disabled = true;
+        try {
+          const res = await apiFetch("/api/revert-user", { method: "POST" });
+          const data = await res.json();
+          if (data.pending) {
+            /* revert finishes when the run aborts; revert event fills the composer */
+            return;
+          }
+          if (data.error) {
+            info(data.error);
+            return;
+          }
+          applyRevert(data.text || "");
+        } finally {
+          if (button) button.disabled = busy;
+        }
+      }
+
+      function applyRevert(text) {
+        const input = $("input");
+        input.value = text;
+        input.style.height = "auto";
+        input.style.height = Math.min(input.scrollHeight, 210) + "px";
+        focusComposer();
+      }
+
+      function rebuildFromHistory(messages) {
+        log.innerHTML = "";
+        lastUserMsgEl = null;
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.id = "empty";
+        empty.innerHTML = `<div class="stack"><img src="/logo.png" alt="" /><h2>Punani powerd</h2><p>Ask for a change. You approve every write and every command before it runs, and every edit shows a diff first.</p></div>`;
+        if (!messages?.length) {
+          log.appendChild(empty);
+          return;
+        }
+        for (const m of messages) {
+          if (m.role === "user") userMsg(m.content, { fromHistory: true });
+          else if (m.role === "assistant" && m.content?.trim()) assistantMsg(m.content);
+        }
+        if (lastUserMsgEl) {
+          const actions = document.createElement("div");
+          actions.className = "msg-actions";
+          const edit = document.createElement("button");
+          edit.type = "button";
+          edit.className = "msg-act";
+          edit.textContent = "Edit";
+          edit.onclick = () => void revertAndEdit(edit);
+          lastUserMsgEl.querySelector(".bubble").appendChild(actions);
+        }
+      }
+
+      let assistantStreamEl = null;
+
+      function assistantMsg(text, delta) {
+        if (delta) {
+          if (!assistantStreamEl) {
+            assistantStreamEl = document.createElement("div");
+            assistantStreamEl.className = "msg assistant";
+            assistantStreamEl.innerHTML = `<div class="who">punani</div><div class="bubble"><div class="core"></div></div>`;
+            add(assistantStreamEl);
+          }
+          assistantStreamEl.querySelector(".core").textContent += text;
+          return;
+        }
+        assistantStreamEl = null;
+        const el = document.createElement("div");
+        el.className = "msg assistant";
+        el.innerHTML = `<div class="who">punani</div><div class="bubble"><div class="core"></div></div>`;
+        el.querySelector(".core").textContent = text;
+        add(el);
+      }
+
+      function reasoningMsg(text) {
+        const el = document.createElement("div");
+        el.className = "reason";
+        el.innerHTML = `<div class="who">thinking</div><div class="body"></div>`;
+        el.querySelector(".body").textContent = text;
+        add(el);
+      }
+
+      function toolCard(tool, args) {
+        const el = document.createElement("div");
+        el.className = "tool";
+        const detail = args ? args.path || args.command || args.pattern || args.text || args.file || "" : "";
+        el.innerHTML = `<div class="core"><div class="head"><span class="name">${esc(tool)}</span><span class="args">${esc(detail)}</span><span class="state">running</span></div></div>`;
+        add(el);
+        return el;
+      }
+
+      function toolEnd(el, output, isError, meta) {
+        el.classList.add(isError ? "err" : "ok");
+        el.querySelector(".state").textContent = isError ? "failed" : "done";
+        const core = el.querySelector(".core");
+        const out = document.createElement("div");
+        out.className = "out";
+        out.textContent = output;
+        core.appendChild(out);
+        if (meta && meta.path && meta.provider) {
+          const wrap = document.createElement("div");
+          wrap.className = "shot";
+          const src = "/file?path=" + encodeURIComponent(meta.path);
+          if (meta.provider === "elevenlabs") {
+            const audio = document.createElement("audio");
+            audio.controls = true;
+            audio.src = src;
+            wrap.appendChild(audio);
+          } else {
+            const img = document.createElement("img");
+            img.src = src;
+            img.alt = meta.path;
+            wrap.appendChild(img);
+          }
+          const cap = document.createElement("div");
+          cap.className = "cap";
+          cap.textContent = meta.path;
+          wrap.appendChild(cap);
+          core.appendChild(wrap);
+          gallery(meta);
+        }
+      }
+
+      function diffCard(ev, host) {
+        const el = document.createElement("div");
+        el.className = "diff";
+        el.innerHTML = `<div class="head"><span class="path">${esc(ev.path)}</span><span class="add">+${ev.additions}</span><span class="del">-${ev.deletions}</span></div><pre></pre>`;
+        const pre = el.querySelector("pre");
+        const lines = ev.lines || [];
+        const changed = lines.map((l, i) => (l.kind === "context" ? -1 : i)).filter((i) => i >= 0);
+        const keep = new Set();
+        for (const i of changed) for (let o = -2; o <= 2; o++) if (i + o >= 0 && i + o < lines.length) keep.add(i + o);
+        let prev = -1;
+        for (const i of [...keep].sort((a, b) => a - b)) {
+          const l = lines[i];
+          if (prev !== -1 && i > prev + 1) {
+            const gap = document.createElement("div");
+            gap.className = "row ctx";
+            gap.innerHTML = `<span class="n"></span><span>…</span>`;
+            pre.appendChild(gap);
+          }
+          const row = document.createElement("div");
+          row.className = "row " + l.kind;
+          const sign = l.kind === "add" ? "+" : l.kind === "remove" ? "-" : " ";
+          row.innerHTML = `<span class="n">${l.newLine ?? l.oldLine ?? ""}</span><span>${esc(sign + l.text)}</span>`;
+          pre.appendChild(row);
+          prev = i;
+        }
+        if (host) { host.appendChild(el); scroll(); return; }
+        add(el);
+      }
+
+      function permissionCard(ev) {
+        const el = document.createElement("div");
+        el.className = "perm";
+        el.innerHTML = `
+          <div class="core">
+            <div class="band"><span class="act">${esc(ev.action)}</span><span>needs your approval</span></div>
+            <div class="body">
+              <div class="sum">${esc(ev.summary)}</div>
+              ${ev.destructive ? `<div class="danger">&#9888; This action can destroy or overwrite data.</div>` : ""}
+              ${ev.detail ? `<div class="detail">${esc(ev.detail)}</div>` : ""}
+              <div class="acts">
+                <button class="pill gold" data-reply="once"><span class="orb">&#10003;</span>Allow once</button>
+                <button class="pill" data-reply="always"><span class="orb">&#8635;</span>Always</button>
+                <button class="pill danger" data-reply="reject"><span class="orb">&#10007;</span>Reject</button>
+                <span class="grow"></span>
+                <input placeholder="reason, if rejecting" />
+              </div>
+            </div>
+          </div>`;
+        const input = el.querySelector("input");
+        el.querySelectorAll("button").forEach((btn) => {
+          btn.onclick = async () => {
+            el.querySelectorAll("button").forEach((b) => (b.disabled = true));
+            await apiFetch("/api/permission", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ id: ev.id, reply: btn.dataset.reply, message: input.value || undefined }),
+            });
+            el.remove();
+          };
+        });
+        add(el);
+        el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+
+      function errorCard(ev) {
+        const el = document.createElement("div");
+        el.className = "err";
+        el.innerHTML = `<div class="core"><div class="title">${esc(ev.title)}</div><div class="msg">${esc(ev.message)}</div></div>`;
+        const core = el.querySelector(".core");
+        if (ev.remedy) {
+          const r = document.createElement("div");
+          r.className = "remedy";
+          r.textContent = ev.remedy;
+          core.appendChild(r);
+        }
+        if (ev.hint) {
+          const h = document.createElement("div");
+          h.className = "remedy";
+          h.style.color = "var(--gold)";
+          h.textContent = ev.hint;
+          core.appendChild(h);
+        }
+        if (ev.suggestions?.length) {
+          const s = document.createElement("div");
+          s.className = "sug";
+          const alternativeCost = ev.suggestionCosts || {};
+          for (const model of ev.suggestions) {
+            const b = document.createElement("button");
+            b.className = "pill";
+            const price = alternativeCost[model];
+            b.innerHTML = `<span class="orb">↗</span>${esc(model)}${
+              price ? ` <span style="color:var(--${price === "free" ? "ok" : "dim"})">${esc(price)}</span>` : ""
+            }`;
+            b.onclick = async () => {
+              await apiFetch("/api/model", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ model }),
+              });
+              el.remove();
+              loadModels();
+            };
+            s.appendChild(b);
+          }
+          core.appendChild(s);
+        }
+        add(el);
+      }
+
+      /* ---------------------------------------------------------------- */
+      const media = [];
+      function gallery(meta) {
+        if (!media.some((m) => m.path === meta.path)) media.push(meta);
+        const box = $("r-media");
+        box.innerHTML = "";
+        if (media.length === 0) {
+          box.innerHTML = `<span class="none">nothing generated yet</span>`;
+          return;
+        }
+        for (const m of media.slice(-6).reverse()) {
+          const fig = document.createElement("figure");
+          const src = "/file?path=" + encodeURIComponent(m.path);
+          if (m.provider === "elevenlabs") {
+            const audio = document.createElement("audio");
+            audio.controls = true;
+            audio.src = src;
+            fig.appendChild(audio);
+          } else {
+            const img = document.createElement("img");
+            img.src = src;
+            img.alt = m.path;
+            fig.appendChild(img);
+          }
+          const cap = document.createElement("figcaption");
+          cap.textContent = m.path.split("/").pop();
+          fig.appendChild(cap);
+          box.appendChild(fig);
+        }
+      }
+
+      function setBusy(v) {
+        busy = v;
+        setState({ busy: v });
+        $("send").disabled = false;
+        $("stop").disabled = !v;
+        $("input").disabled = false;
+        document.body.classList.toggle("busy", v);
+        const editBtn = lastUserMsgEl?.querySelector(".msg-act");
+        if (editBtn) editBtn.disabled = false;
+        $("input").placeholder = v
+          ? "Queue a follow-up, or Stop / Edit to change course…"
+          : "Describe a coding task…";
+      }
+
+      function applyState(st) {
+        if (!st) return;
+        const m = st.model;
+        if (m) {
+          $("r-model").textContent = m.name;
+          $("r-provider").textContent = m.providerID;
+          $("r-ctx").textContent = fmt(m.contextWindow);
+          const tools = $("r-tools");
+          tools.textContent = m.toolSupport ? "supported" : "none";
+          tools.className = "v " + (m.toolSupport ? "good" : "bad");
+          $("r-cost").textContent =
+            m.cost.input === 0 && m.cost.output === 0
+              ? "free"
+              : "$" + m.cost.input + " / $" + m.cost.output;
+        }
+        if (st.project) {
+          $("proj-name").textContent = st.projectInfo?.name || st.project;
+          $("r-project").textContent = st.projectInfo?.name || "—";
+          const dir = $("r-dir");
+          const parts = st.project.split("/").filter(Boolean);
+          dir.textContent = parts.length > 3 ? "…/" + parts.slice(-3).join("/") : st.project;
+          dir.className = "v path";
+          dir.title = st.project;
+        }
+        if (st.session) $("r-session").textContent = st.session.id;
+        applyDevPreview(st.devPreview);
+        applyTaskWindows(st);
+        setBusy(st.busy);
+        const bits = [];
+        if (st.taskLabel) bits.push(st.taskLabel);
+        if (m) bits.push(m.name);
+        if (st.projectInfo?.name) bits.push(st.projectInfo.name + (st.projectInfo.branch ? " (" + st.projectInfo.branch + ")" : ""));
+        $("status").textContent = st.busy ? "working…" : bits.join("  ·  ");
+      }
+
+      let taskWindowsList = [];
+      let currentTaskPort = 0;
+
+      function applyTaskWindows(st) {
+        taskWindowsList = st.taskWindows || [];
+        currentTaskPort = st.taskPort || 0;
+        const sel = $("task-switch");
+        if (!sel) return;
+        if (taskWindowsList.length <= 1) {
+          sel.hidden = true;
+          return;
+        }
+        sel.hidden = false;
+        sel.innerHTML = "";
+        for (const w of taskWindowsList) {
+          const o = document.createElement("option");
+          o.value = String(w.port);
+          o.textContent = `${w.label}  :${w.port}`;
+          sel.appendChild(o);
+        }
+        if (currentTaskPort) sel.value = String(currentTaskPort);
+      }
+
+      async function refreshTaskWindows() {
+        try {
+          const res = await apiFetch("/api/task-windows");
+          applyTaskWindows(await res.json());
+        } catch {}
+      }
+
+      let taskEmbedUrl = "";
+
+      function openTaskEmbed(url, label) {
+        taskEmbedUrl = url;
+        $("task-embed-title").textContent = label || "Another task";
+        $("task-embed-frame").src = url;
+        $("task-embed").classList.add("open");
+      }
+
+      function closeTaskEmbed() {
+        $("task-embed").classList.remove("open");
+        $("task-embed-frame").src = "about:blank";
+        taskEmbedUrl = "";
+        focusComposer();
+      }
+
+      $("task-embed-close").onclick = () => closeTaskEmbed();
+      $("task-embed-popout").onclick = () => {
+        if (taskEmbedUrl) window.open(taskEmbedUrl, "_blank", "noopener,noreferrer");
+      };
+      $("task-embed").onclick = (e) => {
+        if (e.target === $("task-embed")) closeTaskEmbed();
+      };
+
+      $("new-task").onclick = async () => {
+        const res = await apiFetch("/api/task-window", { method: "POST" });
+        const data = await res.json();
+        if (data.error) {
+          info(data.error);
+          return;
+        }
+        openTaskEmbed(data.loginUrl, data.label || "New task");
+        await refreshTaskWindows();
+      };
+
+      $("task-switch").onchange = (e) => {
+        const port = e.target.value;
+        const w = taskWindowsList.find((x) => String(x.port) === port);
+        if (!w) return;
+        openTaskEmbed(`http://${w.host}:${w.port}`, w.label);
+        if (currentTaskPort) e.target.value = String(currentTaskPort);
+      };
+
+      async function loadModels() {
+        try {
+          const res = await apiFetch("/api/models");
+          const { models } = await res.json();
+          const sel = $("model");
+          const current = sel.value;
+          sel.innerHTML = "";
+          for (const m of models) {
+            if (m.status !== "active") continue;
+            const o = document.createElement("option");
+            o.value = `${m.providerID}/${m.id}`;
+            const cost = m.cost.input === 0 && m.cost.output === 0 ? "free" : `$${m.cost.input}/M`;
+            o.textContent = `${m.providerID}/${m.id}  (${cost}${m.toolSupport ? "" : ", no tools"})`;
+            sel.appendChild(o);
+          }
+          if (current) sel.value = current;
+        } catch {}
+      }
+
+      async function loadProviders() {
+        try {
+          const res = await apiFetch("/api/providers");
+          const { providers } = await res.json();
+          const box = $("r-providers");
+          box.innerHTML = "";
+          for (const p of providers) {
+            const row = document.createElement("div");
+            row.className = "prov" + (p.hasKey || p.provider.anonymous ? " on" : "");
+            const label = p.provider.anonymous && !p.hasKey ? "local" : p.hasKey ? "key" : "no key";
+            row.innerHTML = `<span class="pip"></span><span class="id">${esc(p.provider.id)}</span><span class="n">${esc(label)} · ${p.models.length}</span>`;
+            box.appendChild(row);
+          }
+        } catch {}
+      }
+
+      /* ------------------------------------------------------------------
+         Preview
+         ------------------------------------------------------------------ */
+      let previewMode = "off";
+      let devPreviewTargets = [];
+      const DEV_URL_KEY = "punani-dev-url";
+
+      function primaryDevUrl() {
+        const saved = localStorage.getItem(DEV_URL_KEY);
+        if (saved) return saved;
+        return devPreviewTargets[0]?.url || "";
+      }
+
+      function openDevInPane(url) {
+        const target = String(url || primaryDevUrl()).trim();
+        if (!target.startsWith("http")) return;
+        localStorage.setItem(DEV_URL_KEY, target);
+        void setPreview("url", target);
+      }
+
+      function openDevTab(url) {
+        const target = String(url || primaryDevUrl()).trim();
+        if (!target.startsWith("http")) return;
+        localStorage.setItem(DEV_URL_KEY, target);
+        window.open(target, "_blank", "noopener,noreferrer");
+      }
+
+      function applyDevPreview(targets) {
+        devPreviewTargets = Array.isArray(targets) ? targets : [];
+        const headerBtn = $("dev-tab");
+        const popBtn = $("preview-popout");
+        const has = devPreviewTargets.length > 0;
+        headerBtn.hidden = !has;
+        popBtn.hidden = !has;
+        if (has) {
+          const t = devPreviewTargets[0];
+          const tip = `Show ${t.url} in the preview pane. Run ${t.startCommand} first if the page is blank.`;
+          headerBtn.title = tip;
+          popBtn.title = `Open ${t.url} in a separate browser tab`;
+        }
+        const box = $("preview-dev-links");
+        if (!box) return;
+        box.innerHTML = "";
+        if (!has) {
+          box.hidden = true;
+          return;
+        }
+        box.hidden = false;
+        for (const t of devPreviewTargets) {
+          const tab = document.createElement("button");
+          tab.type = "button";
+          tab.className = "pill gold";
+          tab.innerHTML = `<span class="orb">▣</span>Show ${esc(t.label)} here`;
+          tab.title = `${t.startCommand} → ${t.url}`;
+          tab.onclick = () => openDevInPane(t.url);
+          box.appendChild(tab);
+          const pane = document.createElement("button");
+          pane.type = "button";
+          pane.className = "pill ghost";
+          pane.innerHTML = `<span class="orb">↗</span>Open in browser tab`;
+          pane.onclick = () => openDevTab(t.url);
+          box.appendChild(pane);
+        }
+      }
+
+      function applyPreview(state) {
+        if (!state) return;
+        previewMode = state.mode;
+        setState({ previewMode: state.mode });
+        const shell = $("shell");
+        shell.classList.toggle("preview", state.mode !== "off");
+        shell.classList.toggle("preview-mobile", state.mode !== "off");
+        const frame = $("preview-frame");
+        const blank = $("preview-blank");
+        if (state.mode === "off") {
+          frame.hidden = true;
+          blank.hidden = false;
+          return;
+        }
+        blank.hidden = true;
+        frame.hidden = false;
+        const target = state.mode === "url" ? state.url : "/preview/";
+        if (frame.getAttribute("src") !== target) frame.setAttribute("src", target);
+        $("preview-url").value = target;
+      }
+
+      async function setPreview(mode, url) {
+        const res = await apiFetch("/api/preview", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode, url }),
+        });
+        const data = await res.json();
+        applyPreview(data);
+        return data;
+      }
+
+      $("preview-toggle").onclick = async () => {
+        if (previewMode === "off") {
+          const url = primaryDevUrl();
+          if (url && devPreviewTargets.length > 0) await setPreview("url", url);
+          else await setPreview("static");
+        } else {
+          await setPreview("off");
+        }
+      };
+      $("dev-tab").onclick = () => openDevInPane();
+      $("preview-popout").onclick = () => {
+        const url = $("preview-url").value.trim();
+        if (url.startsWith("http")) openDevTab(url);
+        else openDevTab();
+      };
+      $("preview-reload").onclick = () => {
+        const frame = $("preview-frame");
+        frame.contentWindow?.location.reload();
+      };
+      $("preview-external").onclick = () => {
+        const target = $("preview-url").value.trim();
+        if (target.startsWith("http")) openDevTab(target);
+        else if (target.startsWith("/")) openDevTab(window.location.origin + target);
+      };
+      $("preview-url").addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        const value = e.target.value.trim();
+        if (value.startsWith("http")) setPreview("url", value);
+        else setPreview("static");
+      });
+
+      $("model").onchange = async (e) => {
+        await apiFetch("/api/model", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: e.target.value }),
+        });
+        loadModels();
+      };
+      $("stop").onclick = () => void stopRun();
+
+      async function send() {
+        const input = $("input");
+        const text = input.value.trim();
+        if (!text) return;
+        let data = {};
+        try {
+          const res = await apiFetch("/api/message", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ text }),
+          });
+          data = await res.json();
+        } catch (err) {
+          info(err?.message || "Could not send — check that punani web is still running.");
+          return;
+        }
+        if (data.error) {
+          info(data.error);
+          return;
+        }
+        input.value = "";
+        input.style.height = "auto";
+        input.placeholder = busy ? "Queue a follow-up, or Stop / Edit to change course…" : "Describe a coding task…";
+      }
+
+      $("send").onclick = send;
+      $("input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+      });
+      $("input").addEventListener("input", (e) => {
+        e.target.style.height = "auto";
+        e.target.style.height = Math.min(e.target.scrollHeight, 210) + "px";
+      });
+
+      const cards = {};
+      const es = new EventSource("/api/events");
+      es.onerror = () => {
+        info("Live connection dropped — refresh the page if messages stop appearing.");
+      };
+      es.onmessage = (e) => {
+        const ev = JSON.parse(e.data);
+        if (ev.type === "state") { applyState(ev); applyPreview(ev.preview); return; }
+        if (ev.type === "user") { userMsg(ev.text, { queued: ev.queued === true }); return; }
+        if (ev.type === "history") { rebuildFromHistory(ev.messages); return; }
+        if (ev.type === "revert") { applyRevert(ev.text || ""); return; }
+        if (ev.type === "assistant") { assistantMsg(ev.text, ev.delta === true); return; }
+        if (ev.type === "reasoning") { reasoningMsg(ev.text); return; }
+        if (ev.type === "tool_start") { cards[ev.id] = toolCard(ev.tool, ev.args); return; }
+        if (ev.type === "tool_end") { const c = cards[ev.id]; if (c) toolEnd(c, ev.output, ev.isError, ev.meta); return; }
+        if (ev.type === "diff") { diffCard(ev, ev.id && cards[ev.id] ? cards[ev.id].querySelector(".core") : null); return; }
+        if (ev.type === "permission") { permissionCard(ev); return; }
+        if (ev.type === "error") { errorCard(ev); return; }
+        if (ev.type === "notice") { const n = document.createElement("div"); n.className = "notice"; n.textContent = ev.text; add(n); return; }
+        if (ev.type === "reload") { const f = $("preview-frame"); if (!f.hidden) f.contentWindow?.location.reload(); return; }
+        if (ev.type === "done") {
+          assistantStreamEl = null;
+          usage = ev.usage || usage;
+          $("r-tokens").textContent = fmt((usage.inputTokens || 0) + (usage.outputTokens || 0));
+          $("r-spent").textContent = "$" + (usage.cost || 0).toFixed(4);
+          setBusy(false);
+          return;
+        }
+      };
+
+      /* ------------------------------------------------------------------
+         Folder browser
+         ------------------------------------------------------------------ */
+      let browsePath = "";
+      let browseParent = null;
+
+      /** Shorten a path from the left, so the end stays readable. */
+      function shortenPath(full, max) {
+        if (full.length <= max) return full;
+        return "…" + full.slice(full.length - max + 1);
+      }
+
+      function openVeil() {
+        $("veil").classList.add("open");
+        loadFolder(browsePath);
+      }
+      function closeVeil() {
+        $("veil").classList.remove("open");
+        focusComposer();
+      }
+
+      async function loadFolder(path) {
+        const res = await apiFetch("/api/browse?path=" + encodeURIComponent(path || ""));
+        const data = await res.json();
+        if (data.error) { info(data.error); return; }
+        browsePath = data.path;
+        browseParent = data.parent;
+        $("crumb").textContent = shortenPath(data.path, 48);
+        $("path-input").value = data.path;
+        const placesBox = $("places");
+        placesBox.innerHTML = "";
+        for (const place of data.places || []) {
+          const b = document.createElement("button");
+          b.className = "place";
+          b.innerHTML = `<span class="ico">◆</span>${esc(place.name)}`;
+          b.onclick = () => loadFolder(place.path);
+          placesBox.appendChild(b);
+        }
+        const list = $("folders");
+        list.innerHTML = "";
+        if (data.parent) {
+          const up = document.createElement("button");
+          up.className = "folder";
+          up.innerHTML = `<span class="ico">↑</span><span class="nm">..</span>`;
+          up.onclick = () => loadFolder(data.parent);
+          list.appendChild(up);
+        }
+        if (data.directories.length === 0) {
+          const none = document.createElement("div");
+          none.className = "empty";
+          none.textContent = "no folders here — this one is the project";
+          list.appendChild(none);
+        }
+        for (const dir of data.directories) {
+          const b = document.createElement("button");
+          b.className = "folder";
+          b.innerHTML = `<span class="ico">▸</span><span class="nm">${esc(dir.name)}</span>`;
+          b.onclick = () => loadFolder(dir.path);
+          list.appendChild(b);
+        }
+      }
+
+      $("proj").onclick = openVeil;
+      $("empty-open").onclick = openVeil;
+      $("veil-close").onclick = closeVeil;
+      $("veil").onclick = (e) => { if (e.target === $("veil")) closeVeil(); };
+      $("up").onclick = () => { if (browseParent) loadFolder(browseParent); };
+      $("path-input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") loadFolder(e.target.value);
+      });
+      $("path-input").addEventListener("change", (e) => loadFolder(e.target.value));
+      // The native macOS chooser. It reaches any folder on any drive.
+      $("choose-here").onclick = async () => {
+        const button = $("choose-here");
+        button.disabled = true;
+        try {
+          const res = await apiFetch("/api/pick-folder", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ startAt: browsePath || undefined }),
+          });
+          const { id } = await res.json();
+          if (!id) return;
+          // Poll until the dialog is answered.
+          for (let i = 0; i < 1200; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            const status = await (
+              await apiFetch(`/api/pick-folder-status?id=${encodeURIComponent(id)}`)
+            ).json();
+            if (status.status === "done") {
+              $("path-input").value = status.path;
+              await loadFolder(status.path);
+              return;
+            }
+            if (status.status === "cancelled" || status.status === "unknown") return;
+          }
+        } finally {
+          button.disabled = false;
+        }
+      };
+
+      $("open-here").onclick = async () => {
+        const typed = $("path-input").value.trim();
+        const res = await apiFetch("/api/project", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: typed || browsePath }),
+        });
+        const data = await res.json();
+        if (data.error) { info(data.error); return; }
+        closeVeil();
+      };
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeVeil(); });
+
+      /* ------------------------------------------------------------------
+         Settings
+         ------------------------------------------------------------------ */
+      let settingsData = null;
+
+      async function loadSettings() {
+        const res = await apiFetch("/api/settings");
+        settingsData = await res.json();
+        // Remember what had focus so a re-render does not lose the cursor.
+        const active = document.activeElement;
+        const marker = active && active.id ? active.id : null;
+        const caret = active && typeof active.selectionStart === "number" ? active.selectionStart : null;
+        renderSettings();
+        if (marker) {
+          const again = document.getElementById(marker);
+          if (again) {
+            again.focus();
+            if (caret !== null && typeof again.setSelectionRange === "function") {
+              try { again.setSelectionRange(caret, caret); } catch { /* not a text field */ }
+            }
+          }
+        }
+      }
+
+      function renderSettings() {
+        const body = $("settings-body");
+        if (!settingsData) { body.innerHTML = `<div class="hintline">loading…</div>`; return; }
+        body.innerHTML = "";
+        const tab = store.getState().settingsTab;
+        if (tab === "providers") body.appendChild(providersTab());
+        else if (tab === "media") body.appendChild(mediaTab());
+        else body.appendChild(mcpTab());
+        body.scrollTop = 0;
+      }
+
+      function providersTab() {
+        const wrap = document.createElement("div");
+
+        const filter = document.createElement("div");
+        filter.className = "field";
+        const filterInput = document.createElement("input");
+        filterInput.placeholder = "filter providers…";
+        filterInput.value = store.getState().providerFilter;
+        filterInput.addEventListener("input", () => {
+          setState({ providerFilter: filterInput.value });
+          const body = $("settings-body");
+          body.innerHTML = "";
+          body.appendChild(providersTab());
+          const again = body.querySelector('input[placeholder="filter providers…"]');
+          again?.focus();
+          again?.setSelectionRange(again.value.length, again.value.length);
+        });
+        filter.appendChild(filterInput);
+        wrap.appendChild(filter);
+
+        const needle = store.getState().providerFilter.trim().toLowerCase();
+        const matches = settingsData.providers.filter(
+          (p) => !needle || p.id.toLowerCase().includes(needle) || p.name.toLowerCase().includes(needle),
+        );
+
+        // Local runtimes first, then everything that talks to the network.
+        const local = matches.filter((p) => p.anonymous);
+        const cloud = matches.filter((p) => !p.anonymous);
+
+        const group = (title, list) => {
+          if (list.length === 0) return;
+          const label = document.createElement("div");
+          label.className = "hintline";
+          label.style.marginTop = "10px";
+          label.textContent = title;
+          wrap.appendChild(label);
+          for (const p of list) wrap.appendChild(providerCard(p));
+        };
+
+        group("on this machine", local);
+        group("needs a key", cloud);
+
+        if (matches.length === 0) {
+          const none = document.createElement("div");
+          none.className = "hintline";
+          none.textContent = "no provider matches that";
+          wrap.appendChild(none);
+        }
+
+        const add = document.createElement("div");
+        add.className = "row-card";
+        add.innerHTML = `<div class="top"><span class="nm">add a provider</span></div>`;
+        const field = document.createElement("div");
+        field.className = "field";
+        const id = document.createElement("input");
+        id.placeholder = "id, e.g. my-gateway";
+        const url = document.createElement("input");
+        url.placeholder = "base URL, e.g. http://localhost:8000/v1";
+        const go = document.createElement("button");
+        go.className = "pill gold";
+        go.innerHTML = `<span class="orb">+</span>Add`;
+        go.onclick = async () => {
+          if (!id.value.trim()) { info("an id is needed"); return; }
+          const res = await apiFetch("/api/settings-provider", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: id.value, baseURL: url.value, name: id.value }),
+          });
+          const data = await res.json();
+          if (data.error) { info(data.error); return; }
+          id.value = ""; url.value = "";
+          await loadSettings();
+          loadProviders();
+        };
+        field.appendChild(id);
+        field.appendChild(url);
+        field.appendChild(go);
+        add.appendChild(field);
+        wrap.appendChild(add);
+        return wrap;
+      }
+
+      /** The badge for a provider: on disk, in the browser, local, or missing. */
+      function keyBadge(p) {
+        const inBrowser = Object.prototype.hasOwnProperty.call(store.getState().browserKeys, p.id)
+        if (p.hasKey) return `<span class="tag ok" id="state-${p.id}">key</span>`
+        if (inBrowser) return `<span class="tag ok" id="state-${p.id}">key in browser</span>`
+        if (p.anonymous) return `<span class="tag" id="state-${p.id}">local</span>`
+        return `<span class="tag warn" id="state-${p.id}">no key</span>`
+      }
+
+      function providerCard(p) {
+        const card = document.createElement("div");
+        card.className = "row-card";
+        {
+        const state = keyBadge(p);
+        card.innerHTML = `
+            <div class="top">
+              <span class="nm">${esc(p.id)}</span>
+              <span class="tag">${esc(p.kind)}</span>
+              ${state}
+              <span class="tag">${p.modelCount} models</span>
+              <span class="grow"></span>
+            </div>
+            <div class="sub">${esc(p.baseURL)}</div>`;
+
+        const field = document.createElement("div");
+        field.className = "field";
+        if (!p.anonymous) {
+            const browserKeys = store.getState().browserKeys;
+            const inBrowser = Object.prototype.hasOwnProperty.call(browserKeys, p.id);
+
+            // Where should this key live?
+            const where = document.createElement("select");
+            where.id = `where-${p.id}`;
+            for (const [value, label] of [["disk", "on this machine"], ["browser", "in the browser"]]) {
+              const o = document.createElement("option");
+              o.value = value;
+              o.textContent = label;
+              if ((value === "browser") === inBrowser) o.selected = true;
+              where.appendChild(o);
+            }
+            where.onchange = async () => {
+              // No re-render here: that would throw away whatever the user has
+              // typed into the key field.
+              const keys = { ...store.getState().browserKeys };
+              const value = input.value.trim();
+              if (where.value === "browser") {
+                if (value) keys[p.id] = value;
+                else if (keys[p.id]) delete keys[p.id];
+                saveBrowserKeys(keys);
+                setState({ browserKeys: keys });
+                if (value) {
+                  // Drop any copy the server holds, so the browser is the only one.
+                  await apiFetch("/api/settings-key-clear", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ provider: p.id }),
+                  });
+                }
+              } else {
+                delete keys[p.id];
+                saveBrowserKeys(keys);
+                setState({ browserKeys: keys });
+                if (value) {
+                  await apiFetch("/api/settings-key", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ provider: p.id, key: value }),
+                  });
+                }
+              }
+              input.value = "";
+              input.placeholder = where.value === "browser"
+                ? "key in the browser — type to replace"
+                : "key on disk — type to replace";
+              const badge = document.getElementById(`state-${p.id}`);
+              if (badge) badge.outerHTML = keyBadge(p);
+              loadProviders();
+            };
+            field.appendChild(where);
+
+            const input = document.createElement("input");
+            input.type = "password";
+            input.id = `key-${p.id}`;
+            input.placeholder = inBrowser
+              ? "key in the browser — type to replace"
+              : p.hasKey
+                ? "key on disk — type to replace"
+                : "paste the API key";
+            input.autocomplete = "off";
+            const save = document.createElement("button");
+            save.className = "pill gold";
+            save.innerHTML = `<span class="orb">✓</span>Save`;
+            save.onclick = async () => {
+              const value = input.value.trim();
+              if (!value) { info("type a key first"); return; }
+              const keys = { ...store.getState().browserKeys };
+              if (where.value === "browser") {
+                keys[p.id] = value;
+                saveBrowserKeys(keys);
+                setState({ browserKeys: keys });
+                await apiFetch("/api/settings-key-clear", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ provider: p.id }),
+                });
+              } else {
+                delete keys[p.id];
+                saveBrowserKeys(keys);
+                setState({ browserKeys: keys });
+                await apiFetch("/api/settings-key", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ provider: p.id, key: value }),
+                });
+              }
+              input.value = "";
+              await loadSettings();
+              loadProviders();
+              focusComposer();
+            };
+            field.appendChild(input);
+            field.appendChild(save);
+            if (p.hasKey || inBrowser) {
+              const clear = document.createElement("button");
+              clear.className = "pill danger";
+              clear.innerHTML = `<span class="orb">✕</span>Remove`;
+              clear.onclick = async () => {
+                const keys = { ...store.getState().browserKeys };
+                delete keys[p.id];
+                saveBrowserKeys(keys);
+                setState({ browserKeys: keys });
+                await apiFetch("/api/settings-key-clear", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ provider: p.id }),
+                });
+                await loadSettings();
+                loadProviders();
+                focusComposer();
+              };
+              field.appendChild(clear);
+            }
+        }
+        const url = document.createElement("input");
+        url.value = p.baseURL;
+        url.placeholder = "base URL";
+        const setUrl = document.createElement("button");
+        setUrl.className = "pill";
+        setUrl.innerHTML = `<span class="orb">↗</span>Set URL`;
+        setUrl.onclick = async () => {
+          await apiFetch("/api/settings-provider", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: p.id, baseURL: url.value, name: p.name, kind: p.kind }),
+          });
+          await loadSettings();
+        };
+        card.appendChild(field);
+
+        const urlField = document.createElement("div");
+        urlField.className = "field";
+        urlField.appendChild(url);
+        urlField.appendChild(setUrl);
+        card.appendChild(urlField);
+        }
+        return card;
+      }
+
+
+      function mediaTab() {
+        const wrap = document.createElement("div");
+        const image = settingsData.image;
+        const audio = settingsData.audio;
+
+        const img = document.createElement("div");
+        img.className = "row-card";
+        img.innerHTML = `<div class="top"><span class="nm">images</span>
+          <span class="tag ${image.provider === "none" ? "warn" : "ok"}">${esc(image.provider)}</span></div>`;
+        const imgField = document.createElement("div");
+        imgField.className = "field";
+        const backend = document.createElement("select");
+        for (const [value, label] of [["none", "off"], ["kling", "kling CLI"], ["openai-compatible", "OpenAI-compatible"]]) {
+          const o = document.createElement("option");
+          o.value = value; o.textContent = label;
+          if (image.provider === value) o.selected = true;
+          backend.appendChild(o);
+        }
+        backend.onchange = async () => {
+          await apiFetch("/api/settings-image", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider: backend.value }),
+          });
+          await loadSettings();
+        };
+        const model = document.createElement("input");
+        model.value = image.model ?? "";
+        model.placeholder = "model name";
+        const url = document.createElement("input");
+        url.value = image.baseURL ?? "";
+        url.placeholder = "base URL";
+        const saveImg = document.createElement("button");
+        saveImg.className = "pill gold";
+        saveImg.innerHTML = `<span class="orb">✓</span>Save`;
+        saveImg.onclick = async () => {
+          await apiFetch("/api/settings-image", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider: backend.value, model: model.value, baseURL: url.value }),
+          });
+          await loadSettings();
+        };
+        imgField.appendChild(backend);
+        imgField.appendChild(model);
+        imgField.appendChild(url);
+        imgField.appendChild(saveImg);
+        img.appendChild(imgField);
+        const imgKey = document.createElement("div");
+        imgKey.className = "field";
+        const imgKeyInput = document.createElement("input");
+        imgKeyInput.type = "password";
+        imgKeyInput.placeholder = image.hasKey ? "key stored — type to replace" : "API key";
+        imgKeyInput.autocomplete = "off";
+        const saveImgKey = document.createElement("button");
+        saveImgKey.className = "pill";
+        saveImgKey.innerHTML = `<span class="orb">✓</span>Save key`;
+        saveImgKey.onclick = async () => {
+          if (!imgKeyInput.value.trim()) { info("type a key first"); return; }
+          await apiFetch("/api/settings-image", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ apiKey: imgKeyInput.value }),
+          });
+          imgKeyInput.value = "";
+          await loadSettings();
+        };
+        imgKey.appendChild(imgKeyInput);
+        imgKey.appendChild(saveImgKey);
+        img.appendChild(imgKey);
+        wrap.appendChild(img);
+
+        const aud = document.createElement("div");
+        aud.className = "row-card";
+        aud.innerHTML = `<div class="top"><span class="nm">speech</span>
+          <span class="tag ${audio.provider === "none" ? "warn" : "ok"}">${esc(audio.provider)}</span>
+          ${audio.voiceName ? `<span class="tag">${esc(audio.voiceName)}</span>` : ""}</div>`;
+        const audField = document.createElement("div");
+        audField.className = "field";
+        const audBackend = document.createElement("select");
+        for (const [value, label] of [["none", "off"], ["elevenlabs", "ElevenLabs"]]) {
+          const o = document.createElement("option");
+          o.value = value; o.textContent = label;
+          if (audio.provider === value) o.selected = true;
+          audBackend.appendChild(o);
+        }
+        audBackend.onchange = async () => {
+          await apiFetch("/api/settings-audio", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider: audBackend.value }),
+          });
+          await loadSettings();
+        };
+        const audModel = document.createElement("input");
+        audModel.value = audio.model ?? "";
+        audModel.placeholder = "model id";
+        const saveAud = document.createElement("button");
+        saveAud.className = "pill gold";
+        saveAud.innerHTML = `<span class="orb">✓</span>Save`;
+        saveAud.onclick = async () => {
+          await apiFetch("/api/settings-audio", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider: audBackend.value, model: audModel.value }),
+          });
+          await loadSettings();
+        };
+        audField.appendChild(audBackend);
+        audField.appendChild(audModel);
+        audField.appendChild(saveAud);
+        aud.appendChild(audField);
+
+        const audKey = document.createElement("div");
+        audKey.className = "field";
+        const audKeyInput = document.createElement("input");
+        audKeyInput.type = "password";
+        audKeyInput.placeholder = audio.hasKey ? "key stored — type to replace" : "ElevenLabs API key";
+        audKeyInput.autocomplete = "off";
+        const saveAudKey = document.createElement("button");
+        saveAudKey.className = "pill";
+        saveAudKey.innerHTML = `<span class="orb">✓</span>Save key`;
+        saveAudKey.onclick = async () => {
+          if (!audKeyInput.value.trim()) { info("type a key first"); return; }
+          await apiFetch("/api/settings-audio", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ apiKey: audKeyInput.value }),
+          });
+          audKeyInput.value = "";
+          await loadSettings();
+        };
+        const listVoices = document.createElement("button");
+        listVoices.className = "pill";
+        listVoices.innerHTML = `<span class="orb">☰</span>Voices`;
+        listVoices.onclick = async () => {
+          const res = await apiFetch("/api/settings-voices", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ key: audKeyInput.value || undefined }),
+          });
+          const data = await res.json();
+          if (data.error) { info(data.error); return; }
+          const box = document.createElement("div");
+          box.className = "list-pick";
+          for (const voice of data.voices.slice(0, 40)) {
+            const b = document.createElement("button");
+            b.textContent = voice.name;
+            b.onclick = async () => {
+              await apiFetch("/api/settings-audio", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ voiceId: voice.voiceId, voiceName: voice.name }),
+              });
+              await loadSettings();
+            };
+            box.appendChild(b);
+          }
+          aud.appendChild(box);
+        };
+        audKey.appendChild(audKeyInput);
+        audKey.appendChild(saveAudKey);
+        audKey.appendChild(listVoices);
+        aud.appendChild(audKey);
+        wrap.appendChild(aud);
+        return wrap;
+      }
+
+      function mcpTab() {
+        const wrap = document.createElement("div");
+        for (const server of settingsData.mcp) {
+          const card = document.createElement("div");
+          card.className = "row-card";
+          card.innerHTML = `<div class="top"><span class="nm">${esc(server.name)}</span>
+            <span class="tag ${server.enabled === false ? "warn" : "ok"}">${server.enabled === false ? "off" : "on"}</span></div>
+            <div class="sub">${esc(server.command)} ${esc((server.args ?? []).join(" "))}</div>`;
+          const field = document.createElement("div");
+          field.className = "field";
+          const remove = document.createElement("button");
+          remove.className = "pill danger";
+          remove.innerHTML = `<span class="orb">✕</span>Remove`;
+          remove.onclick = async () => {
+            const kept = settingsData.mcp.filter((s) => s.name !== server.name);
+            await apiFetch("/api/settings-mcp", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ servers: kept }),
+            });
+            await loadSettings();
+          };
+          field.appendChild(remove);
+          card.appendChild(field);
+          wrap.appendChild(card);
+        }
+
+        const known = document.createElement("div");
+        known.className = "row-card";
+        known.innerHTML = `<div class="top"><span class="nm">known servers</span></div>`;
+        const list = document.createElement("div");
+        list.className = "list-pick";
+        for (const entry of settingsData.knownMcp) {
+          const b = document.createElement("button");
+          b.textContent = `${entry.name} — ${entry.note}`;
+          b.onclick = async () => {
+            const added = [...settingsData.mcp, {
+              name: entry.name,
+              command: entry.command.split(" ")[0],
+              args: entry.command.split(" ").slice(1),
+              enabled: true,
+            }];
+            await apiFetch("/api/settings-mcp", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ servers: added }),
+            });
+            await loadSettings();
+          };
+          list.appendChild(b);
+        }
+        known.appendChild(list);
+        wrap.appendChild(known);
+
+        const custom = document.createElement("div");
+        custom.className = "row-card";
+        custom.innerHTML = `<div class="top"><span class="nm">add a custom server</span></div>`;
+        const field = document.createElement("div");
+        field.className = "field";
+        const name = document.createElement("input");
+        name.placeholder = "name";
+        const cmd = document.createElement("input");
+        cmd.placeholder = "command, e.g. npx -y my-mcp";
+        const add = document.createElement("button");
+        add.className = "pill gold";
+        add.innerHTML = `<span class="orb">+</span>Add`;
+        add.onclick = async () => {
+          if (!name.value.trim() || !cmd.value.trim()) { info("a name and a command are needed"); return; }
+          const parts = cmd.value.trim().split(/\s+/);
+          const added = [...settingsData.mcp, { name: name.value.trim(), command: parts[0], args: parts.slice(1), enabled: true }];
+          await apiFetch("/api/settings-mcp", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ servers: added }),
+          });
+          name.value = ""; cmd.value = "";
+          await loadSettings();
+        };
+        field.appendChild(name);
+        field.appendChild(cmd);
+        field.appendChild(add);
+        custom.appendChild(field);
+        wrap.appendChild(custom);
+        return wrap;
+      }
+
+      $("settings-toggle").onclick = async () => {
+        $("settings-veil").classList.add("open");
+        await loadSettings();
+      };
+      $("settings-close").onclick = () => {
+        $("settings-veil").classList.remove("open");
+        focusComposer();
+      };
+      $("settings-veil").onclick = (e) => {
+        if (e.target === $("settings-veil")) {
+          $("settings-veil").classList.remove("open");
+          focusComposer();
+        }
+      };
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          if ($("task-embed").classList.contains("open")) {
+            closeTaskEmbed();
+            return;
+          }
+          const open = document.querySelector(".veil.open");
+          if (open) {
+            open.classList.remove("open");
+            focusComposer();
+            return;
+          }
+          if (busy) {
+            e.preventDefault();
+            void stopRun();
+          }
+          return;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === "c" && busy) {
+          const input = $("input");
+          if (document.activeElement === input && input.selectionStart !== input.selectionEnd) return;
+          e.preventDefault();
+          void stopRun();
+        }
+      });
+      $("settings-tabs").onclick = (e) => {
+        const tab = e.target.closest(".tab");
+        if (!tab) return;
+        setState({ settingsTab: tab.dataset.tab });
+        document.querySelectorAll("#settings-tabs .tab").forEach((el) => el.classList.toggle("on", el === tab));
+        renderSettings();
+      };
+
+      loadModels();
+      loadProviders();
+    </script>
+  </body>
+</html>

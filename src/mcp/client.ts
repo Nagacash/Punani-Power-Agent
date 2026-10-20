@@ -1,0 +1,241 @@
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { log } from "../core/logger.js"
+import { redactError } from "../core/redact.js"
+
+/**
+ * A client for MCP servers that speak over stdio.
+ *
+ * The transport is newline-delimited JSON-RPC 2.0. A session is:
+ *
+ *   -> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
+ *   <- {"jsonrpc":"2.0","id":1,"result":{"serverInfo":{...}}}
+ *   -> {"jsonrpc":"2.0","method":"notifications/initialized"}
+ *   -> {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+ *   <- {"jsonrpc":"2.0","id":2,"result":{"tools":[...]}}
+ *   -> {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":...,"arguments":{...}}}
+ *   <- {"jsonrpc":"2.0","id":3,"result":{"content":[...]}}
+ */
+
+export interface McpServerConfig {
+  /** Human label. Also the prefix for the tools it exposes. */
+  name: string
+  /** The executable to run. */
+  command: string
+  args?: string[]
+  /** Extra environment for the child process. */
+  env?: Record<string, string>
+  /** Set to false to keep it configured but not start it. */
+  enabled?: boolean
+  /** Seconds to wait for the handshake. */
+  timeoutSeconds?: number
+}
+
+export interface McpToolInfo {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+}
+
+export interface McpToolResult {
+  content: { type: string; text?: string; mimeType?: string }[]
+  isError?: boolean
+}
+
+interface Pending {
+  resolve: (value: any) => void
+  reject: (error: Error) => void
+  timer: NodeJS.Timeout
+}
+
+export class McpClient {
+  private child?: ChildProcessWithoutNullStreams
+  private buffer = ""
+  private nextId = 1
+  private readonly pending = new Map<number, Pending>()
+  private serverInfo?: { name?: string; version?: string }
+  private tools: McpToolInfo[] = []
+  private closed = false
+
+  constructor(private readonly config: McpServerConfig) {}
+
+  get name(): string {
+    return this.config.name
+  }
+
+  get connected(): boolean {
+    return Boolean(this.child) && !this.closed
+  }
+
+  get serverName(): string | undefined {
+    return this.serverInfo?.name
+  }
+
+  get availableTools(): McpToolInfo[] {
+    return this.tools
+  }
+
+  /** Start the process and complete the handshake. */
+  async connect(): Promise<void> {
+    if (this.child) return
+    const timeout = (this.config.timeoutSeconds ?? 30) * 1000
+
+    this.child = spawn(this.config.command, this.config.args ?? [], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...(this.config.env ?? {}) },
+    })
+    this.closed = false
+
+    this.child.stdout.on("data", (chunk: Buffer) => this.onData(chunk))
+    this.child.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8").trim()
+      if (text) log.debug(`mcp ${this.config.name}: ${text.slice(0, 400)}`)
+    })
+    this.child.on("error", (error) => {
+      log.warn(`mcp ${this.config.name} could not start: ${redactError(error)}`)
+      this.failAll(new Error(`the ${this.config.name} server could not start: ${error.message}`))
+    })
+    this.child.on("exit", (code) => {
+      this.closed = true
+      this.failAll(new Error(`the ${this.config.name} server exited with code ${code}`))
+    })
+
+    const result = await this.request(
+      "initialize",
+      {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        clientInfo: { name: "punani-powerd", version: "1.0.0" },
+      },
+      timeout,
+    )
+    this.serverInfo = result?.serverInfo
+    this.notify("notifications/initialized")
+
+    const listed = await this.request("tools/list", {}, timeout)
+    this.tools = Array.isArray(listed?.tools) ? listed.tools : []
+    log.info(`mcp ${this.config.name} connected with ${this.tools.length} tools`)
+  }
+
+  /** Call one of the server's tools. */
+  async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
+    const result = await this.request(
+      "tools/call",
+      { name, arguments: args },
+      (this.config.timeoutSeconds ?? 60) * 1000,
+    )
+    return { content: result?.content ?? [], isError: result?.isError === true }
+  }
+
+  /** Stop the server. */
+  async close(): Promise<void> {
+    this.closed = true
+    this.failAll(new Error("the server was closed"))
+    if (this.child) {
+      this.child.kill("SIGTERM")
+      this.child = undefined
+    }
+  }
+
+  private onData(chunk: Buffer): void {
+    this.buffer += chunk.toString("utf8")
+    let index: number
+    while ((index = this.buffer.indexOf("\n")) !== -1) {
+      const line = this.buffer.slice(0, index).trim()
+      this.buffer = this.buffer.slice(index + 1)
+      if (!line) continue
+      let message: any
+      try {
+        message = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (typeof message?.id !== "number") continue
+      const entry = this.pending.get(message.id)
+      if (!entry) continue
+      this.pending.delete(message.id)
+      clearTimeout(entry.timer)
+      if (message.error) {
+        entry.reject(new Error(message.error.message ?? "the MCP server returned an error"))
+      } else {
+        entry.resolve(message.result)
+      }
+    }
+  }
+
+  private request(method: string, params: unknown, timeoutMs: number): Promise<any> {
+    if (!this.child) return Promise.reject(new Error(`the ${this.config.name} server is not running`))
+    const id = this.nextId++
+    const payload = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`the ${this.config.name} server did not answer ${method} in time`))
+      }, timeoutMs)
+      this.pending.set(id, { resolve, reject, timer })
+      this.child!.stdin.write(payload)
+    })
+  }
+
+  private notify(method: string): void {
+    this.child?.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method })}\n`)
+  }
+
+  private failAll(error: Error): void {
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timer)
+      entry.reject(error)
+    }
+    this.pending.clear()
+  }
+}
+
+/**
+ * Well-known MCP servers, so a user can say "add the filesystem server" and
+ * get the right command without looking it up.
+ */
+export const KNOWN_MCP_SERVERS: Record<
+  string,
+  { command: string; args?: string[]; note: string; env?: Record<string, string> }
+> = {
+  filesystem: {
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-filesystem"],
+    note: "read and write files in a folder you choose",
+  },
+  memory: {
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-memory"],
+    note: "a knowledge graph the agent can keep notes in",
+  },
+  github: {
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-github"],
+    note: "issues, pull requests and repositories",
+    env: { GITHUB_PERSONAL_ACCESS_TOKEN: "" },
+  },
+  fetch: {
+    command: "uvx",
+    args: ["mcp-server-fetch"],
+    note: "fetch a URL and turn it into text",
+  },
+  sqlite: {
+    command: "uvx",
+    args: ["mcp-server-sqlite", "--db-path", "./database.db"],
+    note: "query a SQLite database",
+  },
+  puppeteer: {
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-puppeteer"],
+    note: "drive a headless browser",
+  },
+  browser: {
+    command: "uvx",
+    args: ["browser-harness-mcp"],
+    note: "drive your real Chrome over CDP, logged in as you. No LLM key needed.",
+  },
+  video: {
+    command: "npx",
+    args: ["-y", "@sylphx/anymd", "mcp"],
+    note: "read a video: transcript, subtitles and metadata, locally. No API key.",
+  },
+}

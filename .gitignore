@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+punani-config.json
+._*
+.DS_Store
+
+# Landing site lives in https://github.com/Nagacash/Punani-AI
+landing/punani-ai/

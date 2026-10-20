@@ -1,0 +1,63 @@
+{
+  "name": "punani-powerd",
+  "version": "1.0.0",
+  "description": "Punani powerd by Naga Codex - a terminal and browser AI coding agent with multi-provider model support, permissions, diffs and live preview",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "punani": "./dist/main.js"
+  },
+  "main": "./dist/main.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
+    "dev": "tsx src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist",
+    "demo": "bash scripts/demo.sh",
+    "test": "tsx --test test/*.test.ts",
+    "prepublishOnly": "npm run build && npm test",
+    "prepack": "npm run build",
+    "docker:build": "docker build -t punani-powerd .",
+    "docker:run": "docker run --rm -it -p 4096:4096 -v \"$HOME/.config/punani-powerd:/config\" -v \"$HOME/.local/share/punani-powerd:/data\" punani-powerd web --host 0.0.0.0 --port 4096",
+    "clean:appledouble": "find . -name '._*' -not -path './node_modules/.pnpm/*' -delete",
+    "landing": "npm --prefix landing/punani-ai run dev"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "coding-agent",
+    "cli",
+    "tui",
+    "web-ui",
+    "openai-compatible",
+    "ollama",
+    "mcp",
+    "mcp-client"
+  ],
+  "homepage": "https://punani.agency",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nagacash/punani-powerd.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Nagacash/punani-powerd/issues"
+  },
+  "author": "Naga Codex",
+  "dependencies": {
+    "zustand": "^5.0.15"
+  }
+}

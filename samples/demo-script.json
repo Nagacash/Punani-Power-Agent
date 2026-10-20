@@ -1,0 +1,49 @@
+{
+  "steps": [
+    {
+      "say": "Let me look at the project first.",
+      "tool": {
+        "id": "call_glob",
+        "name": "glob",
+        "arguments": {
+          "pattern": "**/*.js"
+        }
+      }
+    },
+    {
+      "say": "Now I will read the greeter.",
+      "tool": {
+        "id": "call_read",
+        "name": "read",
+        "arguments": {
+          "path": "src/greet.js"
+        }
+      }
+    },
+    {
+      "say": "I will add the --loud flag now.",
+      "tool": {
+        "id": "call_edit",
+        "name": "edit",
+        "arguments": {
+          "path": "src/greet.js",
+          "oldString": "export function greet(name = DEFAULT_NAME) {\n  return `Hello, ${name}!`\n}",
+          "newString": "export function greet(name = DEFAULT_NAME, loud = false) {\n  const message = `Hello, ${name}!`\n  return loud ? message.toUpperCase() : message\n}"
+        }
+      }
+    },
+    {
+      "say": "Finally, let me run the tests.",
+      "tool": {
+        "id": "call_bash",
+        "name": "bash",
+        "arguments": {
+          "command": "npm test"
+        }
+      }
+    },
+    {
+      "say": "Added a `loud` parameter to `greet()` that uppercases the greeting, and ran the test suite with `npm test`."
+    }
+  ]
+}
