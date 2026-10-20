@@ -16,6 +16,17 @@ Thank you for helping improve **punani-powerd**. This project is open source (MI
 5. **CI must pass** (GitHub Actions runs typecheck + tests on every PR).
 6. A maintainer **reviews and merges**. Until then, your fork is the place to iterate.
 
+## What `main` requires
+
+| Rule | Why |
+| --- | --- |
+| A pull request, always | No direct pushes, so every change is reviewed and CI runs on it |
+| CI green and up to date | The branch has to be current with `main`, not just green once |
+| Conversations resolved | No leaving a review comment unanswered |
+| Linear history, no force pushes, no deletions | The history stays readable |
+
+**One approving review is not required.** This is a single-maintainer project, and GitHub does not let an author approve their own pull request — so requiring one would mean no pull request could ever be merged. Review comments still happen; they just do not block the merge. If a second maintainer joins, turn the requirement back on in the branch protection settings.
+
 ## What we do not merge
 
 - Drive-by refactors unrelated to the issue or PR description
