@@ -99,6 +99,18 @@ function findAsset(...parts: string[]): string | undefined {
   return undefined
 }
 
+/**
+ * Where the landing page lives.
+ *
+ * The landing site is public, so the sign-in page sends people there rather
+ * than at a local port that is usually not running. Override it with
+ * PUNANI_LANDING_URL when the site is somewhere else.
+ */
+function landingUrl(): string {
+  const configured = process.env.PUNANI_LANDING_URL?.trim()
+  return (configured || "https://punani.agency").replace(/\/+$/, "")
+}
+
 /** Did this request come from this machine? */
 function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false
@@ -820,7 +832,7 @@ export class WebServer {
   <p style="font:13px ui-monospace,Menlo,monospace">The token is the part after <code>?t=</code> in the link. Run <code>punani web --open</code> to open the signed-in link automatically.</p>
   <p class="err" id="e"${message ? "" : " hidden"}>${message ?? "That token was not accepted. Copy it again from the terminal."}</p>
   <p class="note">This page is the <strong>local coding agent</strong> on port 4096. It does not use Clerk.
-     The email list and Clerk sign-up live on the <a href="http://localhost:3000#join">Punani AI landing page</a> (port 3000).</p>
+     The email list and Clerk sign-up live on the <a href="${landingUrl()}#join">Punani AI landing page</a>.</p>
 </div>
 <script>
   document.getElementById("f").addEventListener("submit", async (event) => {
