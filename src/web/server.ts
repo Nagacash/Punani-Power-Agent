@@ -13,6 +13,7 @@ import { createSkillTools } from "../tool/skill.js"
 import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex } from "../skills/loader.js"
 import { McpRegistry } from "../mcp/registry.js"
 import { buildSystemPrompt, describeProject, runAgentTurn } from "../agent/agent.js"
+import { loadProjectInstructions } from "../agent/instructions.js"
 import { PermissionEngine, resolvePermission } from "../agent/permission.js"
 import { LlmClient } from "../llm/client.js"
 import { diffLines } from "../tool/diff.js"
@@ -59,6 +60,17 @@ export interface WebOptions {
  * It binds to 127.0.0.1 by default. Exposing it wider means exposing shell
  * execution, so that is opt-in and warns.
  */
+/** The port was taken. The caller decides whether to reuse it or move. */
+export class PortInUseError extends Error {
+  constructor(
+    readonly port: number,
+    readonly host: string,
+  ) {
+    super(`port ${port} is already in use on ${host}`)
+    this.name = "PortInUseError"
+  }
+}
+
 export class WebServer {
   private readonly hub = new EventHub()
   private readonly permissions = new PermissionQueue()
@@ -71,6 +83,7 @@ export class WebServer {
   /** The skills available to the agent, and the index that goes in the prompt. */
   private skillTools: Tool[] = []
   private skillCatalog = ""
+  private projectInstructions = ""
   /**
    * Keys the browser sent with this request. They are used for the call and
    * then forgotten: the server never writes them to disk.
@@ -89,6 +102,8 @@ export class WebServer {
   private server?: http.Server
   /** The active project. Switchable from the browser. */
   private projectRoot: string
+  /** The port in use. Changeable before the server starts. */
+  private boundPort: number
   /** Where the folder browser is allowed to look. */
   private readonly browseRoot: string
   /** Extra roots, such as mounted external drives. */
@@ -98,6 +113,8 @@ export class WebServer {
   private messages: ChatMessage[] = []
   private permissionEngine!: PermissionEngine
   private model?: ModelInfo
+  /** Resolves once the default model is known. */
+  private modelReady: Promise<void> = Promise.resolve()
   private busy = false
   private abort?: AbortController
   /** Follow-up prompts sent while a turn is still running. */
@@ -114,14 +131,12 @@ export class WebServer {
     private readonly options: WebOptions,
   ) {
     this.sessions = new SessionStore()
+    this.boundPort = options.port
     this.registry = new ProviderRegistry(config)
     this.projectRoot = options.projectRoot
     this.browseRoot = options.browseRoot ?? os.homedir()
     this.settings = new Settings(this.config)
-    const skills = discoverSkills(defaultRoots(options.projectRoot))
-    const groups = groupSkills(skills)
-    this.skillTools = createSkillTools(groups, skills)
-    this.skillCatalog = renderGroupIndex(groups)
+    this.rescanSkills(options.projectRoot)
     this.preview = new PreviewServer(options.projectRoot)
     this.preview.on("reload", () => this.hub.send({ type: "reload" }))
     this.extraRoots = options.extraRoots ?? []
@@ -135,14 +150,19 @@ export class WebServer {
   }
 
   get url(): string {
-    return `http://${this.options.host}:${this.options.port}`
+    return `http://${this.options.host}:${this.boundPort}`
   }
 
   /** The bound port. Useful when the port was chosen by the OS. */
   get port(): number {
     const address = this.server?.address()
     if (address && typeof address !== "string") return address.port
-    return this.options.port
+    return this.boundPort
+  }
+
+  /** Change the port before the server starts. */
+  setPort(port: number): void {
+    this.boundPort = port
   }
 
   get loginUrl(): string {
@@ -160,14 +180,19 @@ export class WebServer {
       })
     })
 
-    await new Promise<void>((resolve, reject) => {
-      this.server!.once("error", reject)
-      this.server!.listen(this.options.port, this.options.host, () => resolve())
-    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.server!.once("error", reject)
+        this.server!.listen(this.boundPort, this.options.host, () => resolve())
+      })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error
+      throw new PortInUseError(this.boundPort, this.options.host)
+    }
 
     registerWebInstance({
       host: this.options.host,
-      port: this.port,
+      port: this.boundPort,
       projectRoot: this.projectRoot,
       pid: process.pid,
       label: this.taskLabel,
@@ -175,9 +200,20 @@ export class WebServer {
     })
 
     // Picking the default model means querying every provider's catalog. Do it
-    // in the background so the server is reachable straight away.
-    void this.resolveModel()
+    // in the background so the server is reachable straight away, but hold on
+    // to the promise: a message that arrives before the catalog is known must
+    // wait for it, not be told that no model is configured.
+    this.modelReady = this.resolveModel()
     void this.startMcp()
+  }
+
+  /** Re-read the skills and the instructions for the current project. */
+  private rescanSkills(root: string): void {
+    const skills = discoverSkills(defaultRoots(root))
+    const groups = groupSkills(skills)
+    this.skillTools = createSkillTools(groups, skills)
+    this.skillCatalog = renderGroupIndex(groups)
+    this.projectInstructions = loadProjectInstructions(root).text
   }
 
   /** Start the MCP servers and collect their tools. */
@@ -218,7 +254,7 @@ export class WebServer {
   }
 
   async stop(): Promise<void> {
-    unregisterWebInstance(this.options.host, this.port)
+    unregisterWebInstance(this.options.host, this.boundPort)
     this.permissions.rejectAll("server stopped")
     this.abort?.abort()
     await this.mcp?.stop()
@@ -255,6 +291,21 @@ export class WebServer {
     // the gate would reject the very request that signs you in.
     if (url.pathname === "/session") {
       await this.acceptToken(request, response)
+      return
+    }
+
+    // Unauthenticated, and it says nothing secret: it only lets another
+    // instance recognise this one and reuse it instead of failing.
+    if (url.pathname === "/identify") {
+      response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
+      response.end(
+        JSON.stringify({
+          app: "punani-powerd",
+          version: "1.0.0",
+          pid: process.pid,
+          project: this.projectRoot,
+        }),
+      )
       return
     }
 
@@ -554,6 +605,8 @@ export class WebServer {
 
     this.projectRoot = target
     this.preview.setProject(target)
+    // A different project has its own skills and its own instructions.
+    this.rescanSkills(target)
     this.session = this.sessions.create(target, this.model?.id, this.model?.providerID)
     this.hub.send({ type: "state", ...this.snapshot() })
     this.hub.send({ type: "notice", text: `project changed to ${target}` })
@@ -840,7 +893,7 @@ export class WebServer {
         return json(response, this.switchProject(String(body.path ?? "")))
       case "task-windows":
         return json(response, {
-          current: { port: this.port, host: this.options.host, label: this.taskLabel, url: this.url },
+          current: { port: this.boundPort, host: this.options.host, label: this.taskLabel, url: this.url },
           windows: listWebInstances(this.projectRoot),
         })
       case "task-window":
@@ -855,7 +908,12 @@ export class WebServer {
   /* ---------------------------------------------------------------- */
 
   private snapshot(): Record<string, unknown> {
-    const info = describeProject(this.projectRoot)
+    const info = {
+      ...describeProject(this.projectRoot),
+      // Which instruction files the agent is following. Worth showing: it
+      // explains why it behaves the way it does in this project.
+      instructions: loadProjectInstructions(this.projectRoot).files,
+    }
     const devPreview = devPreviewTargets(this.projectRoot)
     return {
       session: this.session,
@@ -864,7 +922,7 @@ export class WebServer {
       projectInfo: info,
       devPreview,
       taskLabel: this.taskLabel,
-      taskPort: this.port,
+      taskPort: this.boundPort,
       taskWindows: listWebInstances(this.projectRoot),
       busy: this.busy,
       pending: this.permissions.list(),
@@ -890,6 +948,10 @@ export class WebServer {
       })
       return { ok: true, queued: true, queueLength: this.messageQueue.length }
     }
+
+    // The catalog may still be loading. Waiting is right; saying "no model
+    // configured" when one is about to be is not.
+    await this.modelReady
 
     if (!this.model) {
       const msg = "no model is configured yet. Pick one in the model picker."
@@ -1005,6 +1067,7 @@ export class WebServer {
         vision: this.model?.vision === true,
       },
       this.skillCatalog,
+      this.projectInstructions,
     )
     const result = await runAgentTurn(
       {
