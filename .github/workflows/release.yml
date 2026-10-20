@@ -1,0 +1,104 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build-${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: darwin-universal
+            artifact: punani-darwin-universal
+          - os: ubuntu-latest
+            target: linux-x64
+            artifact: punani-linux-x64
+          - os: windows-latest
+            target: windows-x64
+            artifact: punani-windows-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: npm run build:bun
+
+      # A single-file binary has no source tree next to it, so the browser
+      # interface is laid out beside the executable. Without these files
+      # `punani web` serves nothing.
+      - name: Lay out the browser assets
+        shell: bash
+        run: |
+          mkdir -p dist/pkg/vendor
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp dist/punani.exe dist/pkg/punani.exe
+          else
+            cp dist/punani dist/pkg/punani
+            chmod +x dist/pkg/punani
+          fi
+          cp src/web/ui.html src/web/logo.png dist/pkg/
+          cp node_modules/zustand/esm/vanilla.mjs dist/pkg/vendor/zustand.js
+
+      - name: Smoke-test the packaged binary
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./dist/pkg/punani.exe --version
+          else
+            ./dist/pkg/punani --version
+          fi
+          test -f dist/pkg/ui.html
+          test -f dist/pkg/vendor/zustand.js
+
+      - name: Pack
+        shell: bash
+        run: |
+          cd dist/pkg
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            7z a "../punani-${{ matrix.target }}.zip" .
+          else
+            tar -czf "../punani-${{ matrix.target }}.tar.gz" .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/punani-${{ matrix.target }}.tar.gz
+            dist/punani-${{ matrix.target }}.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Check what was built
+        run: ls -la artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/punani-darwin-universal.tar.gz
+            artifacts/punani-linux-x64.tar.gz
+            artifacts/punani-windows-x64.zip

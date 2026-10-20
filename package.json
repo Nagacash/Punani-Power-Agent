@@ -28,6 +28,7 @@
     "prepack": "npm run build",
     "docker:build": "docker build -t punani-powerd .",
     "docker:run": "docker run --rm -it -p 127.0.0.1:4096:4096 -v \"$HOME/.config/punani-powerd:/config\" -v \"$HOME/.local/share/punani-powerd:/data\" punani-powerd web --host 0.0.0.0 --port 4096",
+    "build:bun": "bun build --compile --outfile dist/punani src/main.ts",
     "clean:appledouble": "find . -name '._*' -not -path './node_modules/.pnpm/*' -delete",
     "landing": "npm --prefix landing/punani-ai run dev"
   },
