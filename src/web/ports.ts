@@ -13,6 +13,8 @@ export interface Identified {
   version: string
   pid: number
   project: string
+  /** Only present when the running instance is on this machine. */
+  token?: string
 }
 
 /** Ask whoever is on a port whether they are a Punani instance. */

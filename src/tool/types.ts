@@ -34,6 +34,11 @@ export interface ToolContext {
    */
   previewDiff: (path: string, before: string, after: string) => void
   /**
+   * Point the preview pane at a running dev server.
+   * Optional: not every front end has a preview.
+   */
+  setPreview?: (url: string) => void
+  /**
    * Apply a change to a file.
    *
    * The terminal writes it. An editor shows it as a diff and applies it only
