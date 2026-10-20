@@ -178,6 +178,11 @@
         flex: 1; min-height: 0;
         display: grid;
         grid-template-columns: minmax(0, 1fr) 330px;
+        /* The row has to have a definite height. With an auto row the grid
+           item is sized by its content, the flex chain below it has nothing
+           to fill, and the preview iframe falls back to the 150px default
+           an iframe gets when it is not told how tall to be. */
+        grid-template-rows: minmax(0, 1fr);
         gap: 22px;
         width: min(1560px, calc(100% - 40px));
         margin: 18px auto 0;
@@ -500,7 +505,7 @@
       .shell.preview { grid-template-columns: minmax(0, 1fr) minmax(340px, 38%) 300px; }
       .pane { display: none; min-width: 0; min-height: 0; flex-direction: column; }
       .shell.preview .pane { display: flex; }
-      .pane .frame { flex: 1; min-height: 0; border-radius: 22px; padding: 6px; background: rgba(23, 20, 14, 0.55); border: 1px solid var(--hair-soft); }
+      .pane .frame { flex: 1; min-height: 0; border-radius: 22px; padding: 6px; background: rgba(23, 20, 14, 0.55); border: 1px solid var(--hair-soft); display: flex; flex-direction: column; }
       .pane .frame > .core {
         flex: 1; min-height: 0; border-radius: 17px; overflow: hidden;
         background: #000; border: 1px solid var(--hair);
@@ -953,7 +958,41 @@
         }
       }
 
+      /**
+       * Turn model output into readable plain text.
+       *
+       * The reply is set with textContent, so any markdown the model wrote
+       * would show as its own syntax: "**done**" and "- item" and "```" are
+       * noise to someone who just wants to read the answer. This removes the
+       * syntax and keeps the words, so the answer reads the same whatever
+       * the model happened to write.
+       */
+      function plain(text) {
+        let out = String(text ?? "");
+        // Fenced code: keep the code, drop the fence.
+        out = out.replace(/```[a-zA-Z0-9+#.-]*\n?/g, "");
+        // Inline code and emphasis markers.
+        out = out.replace(/`([^`]+)`/g, "$1");
+        out = out.replace(/\*\*([^*]+)\*\*/g, "$1");
+        out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1$2");
+        out = out.replace(/__([^_]+)__/g, "$1");
+        // Headings: drop the hashes, keep the words.
+        out = out.replace(/^#{1,6}\s+/gm, "");
+        // Links: keep the label, keep the target in brackets.
+        out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)");
+        // Images and bare horizontal rules.
+        out = out.replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1");
+        out = out.replace(/^\s*([-*_])\s*\1\s*\1[\s\S]*$/gm, "");
+        // Bullets become a plain bullet character.
+        out = out.replace(/^\s*[-*+]\s+/gm, "\u2022 ");
+        // A numbered list keeps its number but loses the dot spacing noise.
+        out = out.replace(/^\s*(\d+)\.\s+/gm, "$1. ");
+        return out.trim();
+      }
+
       let assistantStreamEl = null;
+      /** The raw text of the reply being streamed, so it can be cleaned as a whole. */
+      let assistantRaw = "";
 
       function assistantMsg(text, delta) {
         if (delta) {
@@ -962,15 +1001,20 @@
             assistantStreamEl.className = "msg assistant";
             assistantStreamEl.innerHTML = `<div class="who">punani</div><div class="bubble"><div class="core"></div></div>`;
             add(assistantStreamEl);
+            assistantRaw = "";
           }
-          assistantStreamEl.querySelector(".core").textContent += text;
+          // Clean the whole reply, not this piece of it: the markdown syntax
+          // can straddle two chunks, and cleaning them apart leaves the
+          // markers showing.
+          assistantRaw += text;
+          assistantStreamEl.querySelector(".core").textContent = plain(assistantRaw);
           return;
         }
         assistantStreamEl = null;
         const el = document.createElement("div");
         el.className = "msg assistant";
         el.innerHTML = `<div class="who">punani</div><div class="bubble"><div class="core"></div></div>`;
-        el.querySelector(".core").textContent = text;
+        el.querySelector(".core").textContent = plain(text);
         add(el);
       }
 

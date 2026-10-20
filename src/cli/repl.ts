@@ -13,6 +13,7 @@ import { KNOWN_MCP_SERVERS } from "../mcp/client.js"
 import { PermissionEngine, resolvePermission } from "../agent/permission.js"
 import { buildSystemPrompt, describeProject, runAgentTurn } from "../agent/agent.js"
 import { loadProjectInstructions } from "../agent/instructions.js"
+import { plainText } from "../agent/plain.js"
 import { SessionStore, type SessionMeta } from "../session/store.js"
 import { messageText, type ChatMessage } from "../llm/client.js"
 import type { ModelInfo } from "../provider/types.js"
@@ -173,6 +174,7 @@ async function runTurn(
       }),
     notify: (message) => infoLine(message),
     previewDiff: (file, before, after) => renderDiff(file, before, after),
+    setPreview: (url) => infoLine(`preview: ${url}`),
     mutate: diskMutate,
   }
 
@@ -260,7 +262,7 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
         process.stdout.write(event.text)
       } else if (event.text) {
         endAssistantStream()
-        assistantLine(event.text)
+        assistantLine(plainText(event.text))
       }
       break
     case "reasoning":
