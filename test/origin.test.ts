@@ -189,3 +189,16 @@ test("a local caller learns the token of the running instance", async () => {
     await stop()
   }
 })
+
+test("the sign-in page points at the public landing site", async () => {
+  const { base, stop } = await startServer()
+  try {
+    const res = await rawGet(Number(new URL(base).port), "/", {})
+    assert.equal(res.status, 401)
+    // The landing site is public. A local port is not where it lives.
+    assert.match(res.body, /href="https:\/\/punani\.agency#join"/)
+    assert.doesNotMatch(res.body, /localhost:3000/)
+  } finally {
+    await stop()
+  }
+})
