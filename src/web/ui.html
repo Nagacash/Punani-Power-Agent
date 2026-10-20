@@ -990,6 +990,25 @@
         return out.trim();
       }
 
+      /**
+       * Reload the preview frame.
+       *
+       * A frame showing a dev server on another port is cross-origin, and
+       * its Location object is off limits: reading "reload" off it throws a
+       * SecurityError. Same origin, reload the page it is on. Cross origin,
+       * re-assign the source, which reloads it the same way.
+       */
+      function reloadFrame() {
+        const frame = $("preview-frame");
+        const src = frame.getAttribute("src");
+        if (!src) return;
+        try {
+          frame.contentWindow?.location.reload();
+        } catch {
+          frame.setAttribute("src", src);
+        }
+      }
+
       let assistantStreamEl = null;
       /** The raw text of the reply being streamed, so it can be cleaned as a whole. */
       let assistantRaw = "";
@@ -1479,10 +1498,7 @@
         if (url.startsWith("http")) openDevTab(url);
         else openDevTab();
       };
-      $("preview-reload").onclick = () => {
-        const frame = $("preview-frame");
-        frame.contentWindow?.location.reload();
-      };
+      $("preview-reload").onclick = () => reloadFrame();
       $("preview-external").onclick = () => {
         const target = $("preview-url").value.trim();
         if (target.startsWith("http")) openDevTab(target);
@@ -1558,7 +1574,7 @@
         if (ev.type === "permission") { permissionCard(ev); return; }
         if (ev.type === "error") { errorCard(ev); return; }
         if (ev.type === "notice") { const n = document.createElement("div"); n.className = "notice"; n.textContent = ev.text; add(n); return; }
-        if (ev.type === "reload") { const f = $("preview-frame"); if (!f.hidden) f.contentWindow?.location.reload(); return; }
+        if (ev.type === "reload") { if (!$("preview-frame").hidden) reloadFrame(); return; }
         if (ev.type === "done") {
           assistantStreamEl = null;
           usage = ev.usage || usage;

@@ -27,10 +27,16 @@ const running = new Map<number, { child: ReturnType<typeof spawn>; log: string }
 /** Stop every dev server this process started. */
 export function stopDevServers(): void {
   for (const [, entry] of running) {
+    // The child leads its own process group, so this takes the server it
+    // started with it. Killing only the shell would leave the server up.
     try {
-      entry.child.kill("SIGTERM")
+      if (entry.child.pid) process.kill(-entry.child.pid, "SIGTERM")
     } catch {
-      /* already gone */
+      try {
+        entry.child.kill("SIGTERM")
+      } catch {
+        /* already gone */
+      }
     }
   }
   running.clear()
@@ -107,7 +113,8 @@ export const devTool: Tool = {
       const stopped: string[] = []
       for (const [pid, entry] of running) {
         try {
-          entry.child.kill("SIGTERM")
+          if (entry.child.pid) process.kill(-entry.child.pid, "SIGTERM")
+          else entry.child.kill("SIGTERM")
           stopped.push(`${pid} (log: ${entry.log})`)
         } catch {
           /* already gone */
@@ -164,6 +171,15 @@ export const devTool: Tool = {
     })
     child.stdout?.pipe(logStream)
     child.stderr?.pipe(logStream)
+    // The pipes keep the event loop alive as long as the server runs, and
+    // the server is meant to outlive this call. Without this the process
+    // that made the call never gets to exit.
+    // The pipes are sockets at runtime, even though the type says Readable.
+    const unref = (stream: NodeJS.ReadableStream | null): void => {
+      ;(stream as unknown as { unref?: () => void } | null)?.unref?.()
+    }
+    unref(child.stdout)
+    unref(child.stderr)
     child.unref()
     running.set(child.pid ?? 0, { child, log: logPath })
 

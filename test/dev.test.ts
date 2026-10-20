@@ -40,7 +40,21 @@ function context(projectRoot: string, onPreview: (url: string) => void): ToolCon
   }
 }
 
-after(() => stopDevServers())
+after(() => {
+  stopDevServers()
+  // The servers the tool started run in their own process group. Kill the
+  // groups, so the test run leaves nothing behind to hold the runner open.
+  for (const pid of strayGroups) {
+    try {
+      process.kill(-pid, "SIGKILL")
+    } catch {
+      /* already gone */
+    }
+  }
+})
+
+/** Process groups the tool started, so the test can clean up after itself. */
+const strayGroups: number[] = []
 
 test("the dev server stays up and the preview points at it", async () => {
   const port = 4391
@@ -49,6 +63,8 @@ test("the dev server stays up and the preview points at it", async () => {
   const result = await devTool.run({ command: "npm run dev" }, context(projectRoot, (url) => (preview = url)))
 
   assert.ok(!result.isError, `the dev tool failed: ${result.output}`)
+  const pid = Number(/\(pid (\d+)\)/.exec(result.output)?.[1] ?? 0)
+  if (pid) strayGroups.push(pid)
   assert.equal(preview, `http://localhost:${port}`, "the preview must point at the port that answered")
 
   // The point of the tool: the server is still up after the call returns.
@@ -70,7 +86,9 @@ test("the dev server stays up and the preview points at it", async () => {
 test("the dev server is stopped on request", async () => {
   const port = 4392
   const projectRoot = makeProject(port)
-  await devTool.run({ command: "npm run dev" }, context(projectRoot, () => {}))
+  const started = await devTool.run({ command: "npm run dev" }, context(projectRoot, () => {}))
+  const pid = Number(/\(pid (\d+)\)/.exec(started.output)?.[1] ?? 0)
+  if (pid) strayGroups.push(pid)
   assert.ok(await new Promise((resolve) => {
     const socket = http.get({ host: "127.0.0.1", port, path: "/", timeout: 2000 }, () => resolve(true))
     socket.on("error", () => resolve(false))
@@ -94,6 +112,8 @@ test("a command that never serves anything reports the log instead of hanging", 
     { command: "sleep 30", timeout: 1500 },
     context(projectRoot, () => {}),
   )
+  const pid = Number(/\(pid (\d+)\)/.exec(result.output)?.[1] ?? 0)
+  if (pid) strayGroups.push(pid)
   assert.ok(result.isError, "this should be reported as a failure")
   assert.match(result.output, /Log:/)
   assert.ok(fs.existsSync(path.join(projectRoot, ".punani", "dev.log")), "the log must exist")
