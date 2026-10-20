@@ -56,13 +56,42 @@ export interface WebOptions {
  * working buttons and no error anyone can see.
  */
 function findVendorFile(): string | undefined {
-  const candidates = [
-    path.join(HERE, "vendor", "zustand.js"),
-    path.join(HERE, "..", "..", "node_modules", "zustand", "esm", "vanilla.mjs"),
-  ]
-  for (const candidate of candidates) {
+  const installed = findAsset("vendor", "zustand.js")
+  if (installed) return installed
+  const fromPackage = path.join(HERE, "..", "..", "node_modules", "zustand", "esm", "vanilla.mjs")
+  try {
+    if (fs.existsSync(fromPackage)) return fromPackage
+  } catch {
+    /* not there */
+  }
+  return undefined
+}
+
+/**
+ * Where the browser assets live.
+ *
+ * A build puts them next to the compiled server, so the install directory is
+ * the first place to look. A single-file binary has no install directory:
+ * its module path points inside the binary, not on the disk, so the assets
+ * are laid out beside the executable instead.
+ */
+function assetRoots(): string[] {
+  const roots = [HERE]
+  try {
+    const beside = path.dirname(process.execPath)
+    if (beside && !roots.includes(beside)) roots.push(beside)
+  } catch {
+    /* no executable path to work with */
+  }
+  return roots
+}
+
+/** Find a browser asset, wherever it was installed. */
+function findAsset(...parts: string[]): string | undefined {
+  for (const root of assetRoots()) {
+    const file = path.join(root, ...parts)
     try {
-      if (fs.existsSync(candidate)) return candidate
+      if (fs.existsSync(file)) return file
     } catch {
       /* keep looking */
     }
@@ -571,8 +600,14 @@ export class WebServer {
 
   /** The mark. Served from the install directory, not the project. */
   private sendLogo(response: http.ServerResponse): void {
+    const file = findAsset("logo.png")
+    if (!file) {
+      response.writeHead(404, { "content-type": "text/plain" })
+      response.end("not found")
+      return
+    }
     try {
-      const bytes = fs.readFileSync(path.join(HERE, "logo.png"))
+      const bytes = fs.readFileSync(file)
       response.writeHead(200, {
         "content-type": "image/png",
         "cache-control": "public, max-age=86400",
@@ -835,7 +870,12 @@ export class WebServer {
   }
 
   private sendHtml(response: http.ServerResponse): void {
-    const file = path.join(HERE, "ui.html")
+    const file = findAsset("ui.html")
+    if (!file) {
+      response.writeHead(404, { "content-type": "text/plain" })
+      response.end("the browser interface was not installed next to this binary")
+      return
+    }
     try {
       const html = fs.readFileSync(file, "utf8")
       response.writeHead(200, {
