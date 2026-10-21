@@ -762,7 +762,7 @@
       window.addEventListener("error", (event) => {
         document.title = "ERR: " + (event.message || event.error);
         const box = document.getElementById("log");
-        if (box) box.insertAdjacentHTML("afterbegin", `<div class="err"><div class="core"><div class="title">Script error</div><div class="msg">${String(event.message || event.error)}</div></div></div>`);
+        if (box) box.insertAdjacentHTML("afterbegin", `<div class="err"><div class="core"><div class="title">Script error</div><div class="msg">${esc(String(event.message || event.error))}</div></div></div>`);
       });
       import { createStore } from "zustand/vanilla";
 

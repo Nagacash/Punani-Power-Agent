@@ -348,10 +348,11 @@ async function main(): Promise<number> {
   const registry = new ProviderRegistry(config)
   const sessions = new SessionStore()
 
-  const { ask, askSecret, close, echoesInput } = createPrompter({
+  const prompter = createPrompter({
     commands: COMMAND_NAMES,
     projectRoot: options.project ?? process.cwd(),
   })
+  const { ask, askSecret, close, echoesInput } = prompter
 
   try {
     if (options.listProviders) {
@@ -560,6 +561,7 @@ async function main(): Promise<number> {
       resume,
       askSecret,
       echoesInput,
+      setInterruptHandler: (handler) => prompter.onInterrupt(handler),
     }
 
     await startApp(deps)

@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { paths } from "../core/paths.js"
+import { redact } from "../core/redact.js"
 import { messageText, type ChatMessage } from "../llm/client.js"
 
 /**
@@ -61,6 +62,21 @@ export interface StoredSession {
   messages: SessionMessage[]
 }
 
+/**
+ * A message with the secrets taken out.
+ *
+ * A key that was printed in a tool result is in the transcript, and the
+ * transcript is read back on the next turn. The log has always been
+ * scrubbed; the transcript is scrubbed the same way.
+ */
+function redacted(message: SessionMessage): SessionMessage {
+  return {
+    ...message,
+    content: redact(message.content),
+    toolCalls: message.toolCalls?.map((call) => ({ ...call, arguments: redact(call.arguments) })),
+  }
+}
+
 function newId(): string {
   return `ses_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 }
@@ -69,6 +85,11 @@ export class SessionStore {
   constructor(private readonly dir: string = paths.sessionsDir) {}
 
   private file(id: string): string {
+    // The id is used to build a path, so it has to look like an id and
+    // nothing else. A name with a slash in it would read another file.
+    if (!/^ses_[a-z0-9]+$/.test(id)) {
+      throw new Error(`not a session id: ${id}`)
+    }
     return path.join(this.dir, `${id}.jsonl`)
   }
 
@@ -100,7 +121,7 @@ export class SessionStore {
 
   append(meta: SessionMeta, message: SessionMessage): void {
     this.ensureDir()
-    fs.appendFileSync(this.file(meta.id), `${JSON.stringify(message)}\n`, { mode: 0o600 })
+    fs.appendFileSync(this.file(meta.id), `${JSON.stringify(redacted(message))}\n`, { mode: 0o600 })
     meta.updated = Date.now()
     meta.messageCount += 1
     if (meta.title === "New session" && message.role === "user" && message.content.trim()) {
@@ -226,7 +247,7 @@ export class SessionStore {
   /** Replace the on-disk transcript (for edit / revert in the browser). */
   rewrite(meta: SessionMeta, messages: SessionMessage[]): void {
     this.ensureDir()
-    const body = messages.length ? `${messages.map((m) => JSON.stringify(m)).join("\n")}\n` : ""
+    const body = messages.length ? `${messages.map((m) => JSON.stringify(redacted(m))).join("\n")}\n` : ""
     fs.writeFileSync(this.file(meta.id), body, { mode: 0o600 })
     meta.updated = Date.now()
     meta.messageCount = messages.length

@@ -54,7 +54,19 @@ export function ensureReadable(
   extraDirs: string[] = [],
 ): ResolvedPath {
   const resolved = resolveInProject(root, candidate)
-  if (!resolved.outside) return resolved
+  if (!resolved.outside) {
+    // The path is inside the project, but a link inside it can point out.
+    // The real path has to stay inside the real project.
+    const realRoot = realPath(root)
+    const realTarget = realPath(resolved.absolute)
+    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
+      throw new ToolError(
+        `path "${candidate}" is a link that points outside the project directory. ` +
+          "Only files inside the project can be read.",
+      )
+    }
+    return resolved
+  }
   for (const dir of extraDirs) {
     const base = path.resolve(dir)
     // Follow the links on both sides. A link inside the library must not be a
@@ -78,20 +90,45 @@ export function ensureReadable(
   )
 }
 
-/** The real path on disk, or the path itself when it cannot be resolved. */
-function realPath(target: string): string {
-  try {
-    return fs.realpathSync(target)
-  } catch {
-    return target
+/**
+ * The real path on disk.
+ *
+ * A file that is not there yet has no real path, so the directory that
+ * holds it is resolved and the missing parts are put back. Without this a
+ * new file in a linked directory (a temp directory, say) would look like it
+ * was somewhere else.
+ */
+export function realPath(target: string): string {
+  let current = target
+  const tail: string[] = []
+  for (;;) {
+    try {
+      const real = fs.realpathSync(current)
+      return tail.length ? path.join(real, ...tail) : real
+    } catch {
+      const parent = path.dirname(current)
+      if (parent === current) return target
+      tail.unshift(path.basename(current))
+      current = parent
+    }
   }
 }
+
 
 export function ensureInsideProject(root: string, candidate: string): ResolvedPath {
   const resolved = resolveInProject(root, candidate)
   if (resolved.outside) {
     throw new ToolError(
       `path "${candidate}" is outside the project directory. Only files inside the project can be read or written.`,
+    )
+  }
+  // A link inside the project that points out of it is not inside it.
+  const realRoot = realPath(root)
+  const realTarget = realPath(resolved.absolute)
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
+    throw new ToolError(
+      `path "${candidate}" is a link that points outside the project directory. ` +
+        "Only files inside the project can be read or written.",
     )
   }
   return resolved
@@ -115,6 +152,14 @@ export function writeTextFile(absolute: string, content: string): void {
   fs.renameSync(temp, absolute)
 }
 
+/** Write bytes the same way: into a temp file, then over the name. */
+function writeBytes(absolute: string, bytes: Buffer): void {
+  fs.mkdirSync(path.dirname(absolute), { recursive: true })
+  const temp = `${absolute}.${process.pid}.tmp`
+  fs.writeFileSync(temp, bytes, { mode: 0o644 })
+  fs.renameSync(temp, absolute)
+}
+
 /** Read a file, but only if it changed since the caller last saw it. */
 export function readIfUnchanged(absolute: string, expected: string | undefined): { content: string; changed: boolean } {
   const current = readTextFile(absolute)
@@ -134,8 +179,9 @@ export async function diskMutate(change: {
   encoding?: "utf8" | "base64"
 }): Promise<{ applied: boolean }> {
   if (change.encoding === "base64") {
-    fs.mkdirSync(path.dirname(change.path), { recursive: true })
-    fs.writeFileSync(change.path, Buffer.from(change.content, "base64"))
+    // Through a temp file, like the text path: writing straight to the name
+    // would follow a link out of the project.
+    writeBytes(change.path, Buffer.from(change.content, "base64"))
     return { applied: true }
   }
   writeTextFile(change.path, change.content)

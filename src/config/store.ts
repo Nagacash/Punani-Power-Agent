@@ -78,6 +78,9 @@ function emptyConfig(): ConfigFile {
   }
 }
 
+/** Keys that would change the shape of an object rather than fill it. */
+const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"])
+
 function coerce(raw: any): ConfigFile {
   const base = emptyConfig()
   if (!raw || typeof raw !== "object") return base
@@ -97,6 +100,7 @@ function coerce(raw: any): ConfigFile {
   if (raw.providers && typeof raw.providers === "object") {
     for (const [id, value] of Object.entries<any>(raw.providers)) {
       if (!value || typeof value !== "object") continue
+      if (DANGEROUS_KEYS.has(id)) continue
       config.providers[id] = {
         id: value.id ?? id,
         kind: value.kind ?? "openai-compatible",
@@ -111,7 +115,7 @@ function coerce(raw: any): ConfigFile {
   }
   if (raw.apiKeys && typeof raw.apiKeys === "object") {
     for (const [id, value] of Object.entries<any>(raw.apiKeys)) {
-      if (typeof value === "string" && value.length > 0) config.apiKeys[id] = value
+      if (typeof value === "string" && value.length > 0 && !DANGEROUS_KEYS.has(id)) config.apiKeys[id] = value
     }
   }
   if (raw.models && typeof raw.models === "object") {

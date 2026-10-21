@@ -182,6 +182,8 @@ export class PreviewServer extends EventEmitter {
     const target = path.resolve(this.projectRoot, relative)
     const inside = path.relative(this.projectRoot, target)
     if (inside.startsWith("..") || path.isAbsolute(inside)) return undefined
+    // A link inside the project that points out of it is not served.
+    if (!this.staysInside(target)) return undefined
 
     let file = target
     let type = MIME[path.extname(file).toLowerCase()] ?? "application/octet-stream"
@@ -198,6 +200,35 @@ export class PreviewServer extends EventEmitter {
       return undefined
     }
     return { file, type }
+  }
+
+  /**
+   * True when the real path of a file is still inside the project.
+   *
+   * The path is checked twice on purpose: the name has to be inside, and
+   * the file it points at has to be inside as well.
+   */
+  private staysInside(target: string): boolean {
+    const realRoot = this.realPath(this.projectRoot)
+    const realTarget = this.realPath(target)
+    return realTarget === realRoot || realTarget.startsWith(realRoot + path.sep)
+  }
+
+  /** The real path on disk, or the path of the directory that holds it. */
+  private realPath(target: string): string {
+    let current = target
+    const tail: string[] = []
+    for (;;) {
+      try {
+        const real = fs.realpathSync(current)
+        return tail.length ? path.join(real, ...tail) : real
+      } catch {
+        const parent = path.dirname(current)
+        if (parent === current) return target
+        tail.unshift(path.basename(current))
+        current = parent
+      }
+    }
   }
 
   /** Read a file, adding the reload script to HTML. */

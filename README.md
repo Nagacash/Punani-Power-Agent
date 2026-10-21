@@ -603,6 +603,24 @@ skill lives somewhere else. It points at `browser-use` when the machine has
 that skill, and a route that names a skill the machine does not have is
 skipped, so a route never points at nothing.
 
+### The skill libraries worth having
+
+The routes that ship with the app point at skills from libraries that are
+installed with the [skills](https://skills.sh) CLI. Each is one command:
+
+```bash
+npx skills add pbakaus/impeccable          # design: a page that looks like it was made by someone
+npx skills add blader/humanizer            # writing that sounds like a person
+npx skills add cathrynlavery/diagram-design # diagrams, charts and schemas
+npx skills add D4Vinci/Scrapling           # scraping a site that says no
+npx skills add coreyhaines31/marketingskills # SEO, copy, content and campaigns
+npx skills add mattpocock/skills           # the engineering workflows
+```
+
+They land in `~/.agents/skills`, which Punani already reads, so the agent
+finds them on the next run. A route for a library that is not installed is
+skipped, so nothing breaks and nothing points at nothing.
+
 ```
 /skills                what groups exist
 ```
@@ -739,6 +757,31 @@ unpack an app and observe it at runtime.
 
 MCP tools are named `<server>_<tool>` and are gated by their own permission
 action, so a tool from a third-party server still has to be approved.
+
+## Safety
+
+The agent runs commands and writes files on your machine, so the boundaries
+around it are worth knowing.
+
+- **The browser interface is on the loopback address** and needs a token
+  that only a request from this machine gets. The address in the `Host`
+  header has to be one of ours, so a page on the internet that was pointed
+  at this address is refused. The token is only accepted in the query string
+  on the sign-in, never on another path, so it does not end up in history
+  or in a referrer.
+- **The preview is served in its own origin.** A page from the project is
+  sandboxed, so it cannot use the session the app holds.
+- **A path cannot leave the project.** A path that climbs out with `..` is
+  refused, and so is a link inside the project that points out of it.
+- **A secret that was printed is not kept.** The log and the session
+  transcript are scrubbed of the keys that are configured, so a key that
+  turned up in a tool result does not sit in the transcript and get sent to
+  the provider on the next turn.
+- **A skill is untrusted text.** A skill body cannot close the envelope it
+  is delivered in, and neither can the fields in its frontmatter, so a
+  cloned repository cannot write into the system prompt.
+- **The permission prompt is the gate.** `read` and `search` are allowed by
+  default; `write`, `edit` and `bash` ask. A decline is final.
 
 ## Deploying
 
