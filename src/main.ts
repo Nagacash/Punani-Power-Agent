@@ -6,7 +6,7 @@ import { redactError } from "./core/redact.js"
 import { ConfigStore } from "./config/store.js"
 import { ProviderRegistry } from "./provider/registry.js"
 import { SessionStore, toChatMessages, type SessionMeta } from "./session/store.js"
-import { startApp, createPrompter, type AppDeps, type Prompter, type SecretPrompter } from "./cli/repl.js"
+import { startApp, createPrompter, COMMAND_NAMES, type AppDeps, type Prompter, type SecretPrompter } from "./cli/repl.js"
 import { errorLine, infoLine, successLine, warnLine } from "./ui/render.js"
 import { style } from "./ui/theme.js"
 import type { ModelInfo } from "./provider/types.js"
@@ -348,7 +348,10 @@ async function main(): Promise<number> {
   const registry = new ProviderRegistry(config)
   const sessions = new SessionStore()
 
-  const { ask, askSecret, close, echoesInput } = createPrompter()
+  const { ask, askSecret, close, echoesInput } = createPrompter({
+    commands: COMMAND_NAMES,
+    projectRoot: options.project ?? process.cwd(),
+  })
 
   try {
     if (options.listProviders) {
