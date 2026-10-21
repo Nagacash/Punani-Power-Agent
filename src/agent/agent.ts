@@ -1,6 +1,6 @@
 import path from "node:path"
 import fs from "node:fs"
-import type { ChatMessage, LlmClient, ToolCall } from "../llm/client.js"
+import type { ChatClient, ChatMessage, ToolCall } from "../llm/client.js"
 import { LlmError } from "../llm/errors.js"
 import type { ModelInfo } from "../provider/types.js"
 import { estimateCost } from "../provider/types.js"
@@ -128,13 +128,15 @@ export interface AgentEvent {
 }
 
 export interface AgentOptions {
-  client: LlmClient
+  client: ChatClient
   model: ModelInfo
   tools: Tool[]
   projectRoot: string
   context: ToolContext
   /** The skill library, so the turn can check what a loaded skill asked for. */
   skills?: Skill[]
+  /** How hard a reasoning model is asked to think. */
+  reasoningEffort?: "low" | "medium" | "high"
   maxSteps?: number
   signal?: AbortSignal
   onEvent?: (event: AgentEvent) => void
@@ -179,6 +181,7 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
         messages,
         tools: tools.map(toDefinition),
         signal,
+        reasoningEffort: options.reasoningEffort,
         onToken: options.onEvent
           ? (delta) => {
               streamedText = true

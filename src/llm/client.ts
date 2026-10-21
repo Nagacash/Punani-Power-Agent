@@ -72,6 +72,8 @@ export interface ChatRequest {
   onToken?: (delta: string) => void
   /** When set, emits the model's thinking as it arrives. */
   onReasoning?: (delta: string) => void
+  /** How hard a reasoning model is asked to think. */
+  reasoningEffort?: "low" | "medium" | "high"
 }
 
 export interface LlmClientOptions {
@@ -127,11 +129,22 @@ function usageFromPayload(payload: any): Usage {
 }
 
 /**
+ * What the agent needs from a provider.
+ *
+ * The OpenAI-compatible client and the Anthropic client both satisfy it, so
+ * the agent does not know which one is talking to the model.
+ */
+export interface ChatClient {
+  readonly providerID: string
+  complete(request: ChatRequest): Promise<CompletionResult>
+}
+
+/**
  * Minimal OpenAI-compatible chat client.
  *
  * Uses streaming when `onToken` is provided; otherwise one JSON response.
  */
-export class LlmClient {
+export class LlmClient implements ChatClient {
   private readonly options: LlmClientOptions
 
   constructor(options: LlmClientOptions) {
@@ -364,6 +377,15 @@ export class LlmClient {
     }
     if (request.temperature !== undefined) body.temperature = request.temperature
     if (request.maxOutputTokens !== undefined) body.max_tokens = request.maxOutputTokens
+    if (request.reasoningEffort) {
+      // OpenRouter takes the effort in its own object; OpenAI and the
+      // OpenAI-compatible servers take a flat field.
+      if (this.options.providerID === "openrouter") {
+        body.reasoning = { effort: request.reasoningEffort }
+      } else {
+        body.reasoning_effort = request.reasoningEffort
+      }
+    }
 
     const timeout = this.options.timeoutMs ?? 180_000
     const controller = new AbortController()

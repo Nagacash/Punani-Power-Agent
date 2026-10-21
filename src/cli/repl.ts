@@ -4,7 +4,7 @@ import { Writable } from "node:stream"
 import { APP_TITLE, paths } from "../core/paths.js"
 import { ConfigStore } from "../config/store.js"
 import { ProviderRegistry } from "../provider/registry.js"
-import { LlmClient } from "../llm/client.js"
+import { createClient } from "../llm/factory.js"
 import { buildTools } from "../tool/registry.js"
 import { createSkillTools } from "../tool/skill.js"
 import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex, type Skill } from "../skills/loader.js"
@@ -190,12 +190,7 @@ async function runTurn(
     return
   }
 
-  const client = new LlmClient({
-    baseURL: provider.baseURL,
-    apiKey: key,
-    providerID: provider.id,
-    headers: deps.config.headers(provider.id),
-  })
+  const client = createClient(provider, key, deps.config.headers(provider.id))
 
   const context: ToolContext = {
     projectRoot,
@@ -236,6 +231,7 @@ async function runTurn(
       projectRoot,
       context,
       skills: deps.skills,
+      reasoningEffort: deps.config.reasoningEffort(modelKey(model)),
       signal: controller.signal,
       onEvent: onEvent,
     },
@@ -1026,6 +1022,31 @@ async function handleCommand(
       return "handled"
     }
 
+    case "reasoning": {
+      const key = modelKey(deps.state.model)
+      const current = deps.config.reasoningEffort(key)
+      if (!argument) {
+        infoLine(`model: ${key}`)
+        infoLine(`effort: ${current ?? "the model's own default"}`)
+        infoLine("set it with: /reasoning low | medium | high")
+        infoLine("go back to the default with: /reasoning off")
+        return "handled"
+      }
+      const value = argument.trim().toLowerCase()
+      if (value === "off" || value === "default" || value === "none") {
+        deps.config.setReasoningEffort(key, undefined)
+        successLine(`${key} uses the model's own effort now`)
+        return "handled"
+      }
+      if (value !== "low" && value !== "medium" && value !== "high") {
+        errorLine("usage: /reasoning low | medium | high | off")
+        return "handled"
+      }
+      deps.config.setReasoningEffort(key, value)
+      successLine(`${key} thinks ${value}`)
+      return "handled"
+    }
+
     case "session": {
       infoLine(`session id: ${session.id}`)
       infoLine(`messages: ${session.messageCount}`)
@@ -1073,6 +1094,7 @@ function printHelp(): void {
     ["/help", "show this list"],
     ["/models [filter]", "list models, optionally filtered by a provider or substring"],
     ["/model <provider/model>", "set the default model"],
+    ["/reasoning <level>", "how hard the model is asked to think"],
     ["/provider", "list providers and whether a key is stored"],
     ["/provider <id> key <value>", "store an API key locally (mode 0600)"],
     ["/provider <id> url <url>", "point a provider at a different base URL"],

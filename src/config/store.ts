@@ -3,7 +3,7 @@ import path from "node:path"
 import { paths } from "../core/paths.js"
 import { registerSecret } from "../core/redact.js"
 import { BUILTIN_PROVIDERS, type ModelOverride } from "../provider/builtin.js"
-import type { ProviderConfig } from "../provider/types.js"
+import type { ProviderConfig, ReasoningEffort } from "../provider/types.js"
 import type { ImageSettings } from "../tool/image.js"
 import type { AudioSettings } from "../tool/audio.js"
 import type { McpServerConfig } from "../mcp/client.js"
@@ -33,6 +33,8 @@ export interface ConfigFile {
   apiKeys: Record<string, string>
   /** "provider/model" -> overrides. */
   models: Record<string, ModelOverride>
+  /** "provider/model" -> how hard the model is asked to think. */
+  reasoningEffort?: Record<string, ReasoningEffort>
   /** tool action -> ordered rules. Last match wins. */
   permissions: Record<string, PermissionRule[]>
   /** Extra headers sent with requests, per provider id. */
@@ -288,6 +290,19 @@ export class ConfigStore {
 
   modelOverride(key: string): ModelOverride | undefined {
     return this.get().models[key]
+  }
+
+  /** How hard a model is asked to think. */
+  reasoningEffort(key: string): ReasoningEffort | undefined {
+    return this.get().reasoningEffort?.[key]
+  }
+
+  setReasoningEffort(key: string, effort: ReasoningEffort | undefined): void {
+    const config = this.get()
+    config.reasoningEffort = config.reasoningEffort ?? {}
+    if (effort) config.reasoningEffort[key] = effort
+    else delete config.reasoningEffort[key]
+    this.save()
   }
 
   permissions(): Record<string, PermissionRule[]> {

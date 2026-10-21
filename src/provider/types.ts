@@ -5,9 +5,17 @@
  * same record works for a remote API, a local Ollama daemon, or a proxy router.
  */
 
-export type ProviderKind = "freellmapi" | "ollama" | "lmstudio" | "openai-compatible"
+export type ProviderKind = "freellmapi" | "ollama" | "lmstudio" | "openai-compatible" | "anthropic"
 
 export type ProviderSource = "builtin" | "user" | "env"
+
+/**
+ * How hard a model is asked to think.
+ *
+ * A reasoning model spends more time and more tokens on the same question.
+ * Low is for the quick ones, high is for the hard ones.
+ */
+export type ReasoningEffort = "low" | "medium" | "high"
 
 export interface ProviderConfig {
   /** Stable id, unique across the config. Used as the `provider/model` prefix. */

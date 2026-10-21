@@ -158,7 +158,7 @@ FreeLLMAPI is the default experimental provider, but nothing is chosen for you:
 you pick the model explicitly, and every shell command is approved by hand. Your
 workflow never depends on a free tier being available.
 
-Eight providers ship built in:
+Nine providers ship built in:
 
 | id | Provider | Endpoint | Key env var |
 | --- | --- | --- | --- |
@@ -168,8 +168,38 @@ Eight providers ship built in:
 | `groq` | Groq | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
 | `cerebras` | Cerebras | `https://api.cerebras.ai/v1` | `CEREBRAS_API_KEY` |
 | `openai` | OpenAI | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| `anthropic` | Anthropic (native) | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
 | `ollama` | Ollama (local) | `http://localhost:11434` | — |
 | `lmstudio` | LM Studio (local) | `http://localhost:1234/v1` | — |
+
+### Anthropic
+
+Anthropic gets its own client, because it does not speak the OpenAI shape.
+That buys three things the OpenAI-compatible path cannot have: the system
+prompt and the tool definitions are **cached**, so they cost a fraction on
+every turn after the first; the model's **thinking** is its own block, with a
+budget you set; and the tool results come back the way Anthropic wants them.
+
+```
+/provider anthropic key sk-ant-...
+/models anthropic
+/model anthropic/claude-sonnet-4-5
+```
+
+### How hard a model thinks
+
+A reasoning model spends more time and more tokens on the same question.
+`/reasoning` sets how hard the current model is asked to think, and the
+setting is remembered per model:
+
+```
+/reasoning high
+/reasoning off
+```
+
+OpenRouter takes the effort in its own object and the OpenAI-compatible
+servers take a flat field; punani sends the right one for the provider. On
+Anthropic the same setting becomes the thinking budget.
 
 ### Finding free models
 
@@ -737,6 +767,7 @@ $ punani --resume ses_mvgkk6lnikjk51
 | `/skill <words>` | find a skill, or read one with `/skill load <name>` |
 | `/models [filter]` | list models, optionally by provider or substring |
 | `/model <provider/model>` | set the default model |
+| `/reasoning <level>` | how hard the model is asked to think: `low`, `medium`, `high`, `off` |
 | `/provider` | list providers and whether a key is stored |
 | `/provider <id> key <value>` | store a key locally |
 | `/provider <id> url <url>` | point a provider at a different base URL |

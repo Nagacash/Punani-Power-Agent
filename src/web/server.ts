@@ -13,12 +13,13 @@ import { createSkillTools } from "../tool/skill.js"
 import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex } from "../skills/loader.js"
 import { McpRegistry } from "../mcp/registry.js"
 import { buildSystemPrompt, describeProject, runAgentTurn } from "../agent/agent.js"
+import { modelKey } from "../provider/types.js"
 import { loadAlwaysOn, renderAlwaysOn } from "../agent/prompt.js"
 import { buildRoutes, renderRoutes } from "../skills/routing.js"
 import { stopDevServers } from "../tool/dev.js"
 import { loadProjectInstructions } from "../agent/instructions.js"
 import { PermissionEngine, resolvePermission } from "../agent/permission.js"
-import { LlmClient } from "../llm/client.js"
+import { createClient } from "../llm/factory.js"
 import { diffLines } from "../tool/diff.js"
 import { diskMutate } from "../tool/fsutil.js"
 import { messageText, type ChatMessage } from "../llm/client.js"
@@ -1159,12 +1160,7 @@ export class WebServer {
     // A key the browser sent wins over the one on disk, so the browser can
     // hold a key the server never sees.
     const effectiveKey = key ?? this.requestKeys[provider.id]
-    const client = new LlmClient({
-      baseURL: provider.baseURL,
-      apiKey: effectiveKey,
-      providerID: provider.id,
-      headers: this.config.headers(provider.id),
-    })
+    const client = createClient(provider, effectiveKey, this.config.headers(provider.id))
 
     const context: ToolContext = {
       allowedReadDirs: defaultRoots(this.projectRoot).map((root) => root.path),
@@ -1229,6 +1225,7 @@ export class WebServer {
       {
         client,
         model: this.model!,
+        reasoningEffort: this.config.reasoningEffort(modelKey(this.model!)),
         tools,
         projectRoot: this.projectRoot,
         context,

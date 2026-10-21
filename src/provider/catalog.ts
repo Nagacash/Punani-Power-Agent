@@ -351,6 +351,90 @@ export async function fetchLmStudio(
 }
 
 /* ------------------------------------------------------------------ */
+/* Anthropic                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The price of a Claude model, per million tokens.
+ *
+ * Anthropic publishes a price list, but not in the catalog endpoint, so this
+ * is a table. It goes stale when they change a price; the number is only
+ * used for the cost estimate in the header.
+ */
+const ANTHROPIC_PRICES: Record<string, { input: number; output: number }> = {
+  "claude-opus-4": { input: 5, output: 25 },
+  "claude-sonnet-4": { input: 3, output: 15 },
+  "claude-haiku-4": { input: 1, output: 5 },
+  "claude-3-7": { input: 3, output: 15 },
+  "claude-3-5": { input: 3, output: 15 },
+  "claude-3": { input: 15, output: 75 },
+}
+
+/** The context window of a Claude model, when the name says which one it is. */
+function anthropicContext(id: string): number {
+  if (/claude-opus-4/.test(id)) return 200_000
+  if (/claude-sonnet-4/.test(id)) return 200_000
+  if (/claude-haiku-4/.test(id)) return 200_000
+  if (/claude-3-7/.test(id)) return 200_000
+  if (/claude-3-5/.test(id)) return 200_000
+  if (/claude-3/.test(id)) return 200_000
+  return 128_000
+}
+
+function anthropicPrice(id: string): { input: number; output: number } {
+  for (const [family, price] of Object.entries(ANTHROPIC_PRICES)) {
+    if (id.includes(family)) return price
+  }
+  return { input: 3, output: 15 }
+}
+
+/**
+ * The Anthropic model list.
+ *
+ * It has no context window, no price and no capability flags, so they come
+ * from the name of the model.
+ */
+export async function fetchAnthropic(
+  provider: ProviderConfig,
+  apiKey: string | undefined,
+): Promise<CatalogResult> {
+  const url = `${base(provider)}/models`
+  let payload: any
+  try {
+    payload = await fetchJson(url, {
+      ...authHeaders(apiKey),
+      "anthropic-version": "2023-06-01",
+    })
+  } catch (error) {
+    throw new CatalogError(
+      `could not reach ${url}: ${error instanceof Error ? error.message : String(error)}`,
+      `Check that ${provider.name} is reachable and that the key is right.`,
+    )
+  }
+
+  const rows: any[] = Array.isArray(payload?.data) ? payload.data : []
+  const models: ModelInfo[] = rows.map((row) => {
+    const id = String(row?.id ?? "")
+    const price = anthropicPrice(id)
+    return {
+      id,
+      providerID: provider.id,
+      name: String(row?.display_name ?? id),
+      contextWindow: anthropicContext(id),
+      toolSupport: true,
+      // Extended thinking arrived with Claude 3.7 and is on every model since.
+      reasoning: /claude-(opus|sonnet|haiku)-4|claude-3-7/.test(id),
+      vision: true,
+      cost: { input: price.input, output: price.output, currency: "USD" },
+      status: "active",
+      origin: "catalog",
+    } satisfies ModelInfo
+  })
+
+  return { models: models.filter((model) => model.id !== ""), notes: [] }
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -365,6 +449,8 @@ export async function fetchCatalog(
       return fetchOllama(provider, apiKey)
     case "lmstudio":
       return fetchLmStudio(provider, apiKey)
+    case "anthropic":
+      return fetchAnthropic(provider, apiKey)
     case "openai-compatible":
       return fetchOpenAICompatible(provider, apiKey)
   }
