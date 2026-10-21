@@ -59,3 +59,15 @@ when: the user wants a prototype before the real thing -> prototype
 when: the user wants a look back at how the work went -> retro
 when: the user wants the work sorted by what to do first -> triage
 when: the user wants a pull request written -> pr
+
+# Video. Install them with: npx skills add heygen-com/hyperframes
+when: the user wants a promo video for a product or a site -> product-launch-video
+when: the user wants a video of a website, a tour of a site -> website-to-video
+when: the user wants an explainer video from text, notes or a topic -> faceless-explainer
+when: the user wants captions on a video they have -> embedded-captions
+when: the user wants a video of a pull request -> pr-to-video
+when: the user wants a motion graphic, an animated title or a logo sting -> motion-graphics
+when: the user wants a deck turned into a video -> slideshow
+when: the user wants a video made from a video they have -> talking-head-recut
+when: the user wants a clip of a song -> music-to-video
+when: the user wants a video and it is not clear which kind -> hyperframes
