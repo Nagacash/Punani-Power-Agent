@@ -7,6 +7,7 @@ import { APP_TITLE, paths } from "../core/paths.js"
 import { ConfigStore } from "../config/store.js"
 import { ProviderRegistry } from "../provider/registry.js"
 import { createClient } from "../llm/factory.js"
+import { createFailover } from "../provider/failover.js"
 import { buildTools } from "../tool/registry.js"
 import { createSkillTools } from "../tool/skill.js"
 import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex, type Skill } from "../skills/loader.js"
@@ -16,11 +17,18 @@ import { loadAlwaysOn, renderAlwaysOn } from "../agent/prompt.js"
 import { McpRegistry } from "../mcp/registry.js"
 import { KNOWN_MCP_SERVERS } from "../mcp/client.js"
 import { PermissionEngine, resolvePermission } from "../agent/permission.js"
-import { buildSystemPrompt, describeProject, runAgentTurn, type PromptParts } from "../agent/agent.js"
+import {
+  buildSystemPrompt,
+  describeProject,
+  runAgentTurn,
+  DEFAULT_MAX_STEPS,
+  type AgentTurnResult,
+  type PromptParts,
+} from "../agent/agent.js"
 import { loadProjectInstructions } from "../agent/instructions.js"
 import { createPlainStream, flushPlainStream, plainStream, plainText } from "../agent/plain.js"
 import { SessionStore, type SessionMeta } from "../session/store.js"
-import { messageText, type ChatMessage } from "../llm/client.js"
+import { type ChatMessage } from "../llm/client.js"
 import type { ModelInfo } from "../provider/types.js"
 import { modelKey } from "../provider/types.js"
 import { diskMutate } from "../tool/fsutil.js"
@@ -39,6 +47,7 @@ import {
   warnLine,
 } from "../ui/render.js"
 import { interpretPermissionReply, renderDiff, renderPermissionRequest } from "../ui/prompt.js"
+import { startSpinner, stopSpinner } from "../ui/spinner.js"
 import { login as klingLogin, whoAmI as klingWhoAmI } from "../provider/kling.js"
 import {
   listModels as elevenLabsModels,
@@ -194,15 +203,31 @@ async function runTurn(
 
   const client = createClient(provider, key, deps.config.headers(provider.id))
 
+  // A provider that throttles hands the turn to another model. The session
+  // follows it, so the next turn starts on the model that works.
+  const failover = createFailover({
+    registry,
+    config: deps.config,
+    onSwitch: (next) => {
+      deps.state.model = next
+      deps.state.providerName =
+        registry.providers().find((entry) => entry.id === next.providerID)?.name ?? next.providerID
+    },
+  })
+
   const context: ToolContext = {
     projectRoot,
     allowedReadDirs: defaultRoots(projectRoot).map((root) => root.path),
     requestPermission: (request) =>
       resolvePermission(permissions, request, async (pending) => {
+        // The prompt owns the screen while it is up.
+        stopSpinner()
         renderPermissionRequest(pending)
         const reply = await ask(`${style.yellow("?")} `)
         stdout.write("\n")
-        return interpretPermissionReply(reply, pending)
+        const decision = interpretPermissionReply(reply, pending)
+        startSpinner("working")
+        return decision
       }),
     notify: (message) => infoLine(message),
     previewDiff: (file, before, after) => renderDiff(file, before, after),
@@ -225,58 +250,45 @@ async function runTurn(
   const onSigint = (): void => controller.abort()
   process.once("SIGINT", onSigint)
 
-  const result = await runAgentTurn(
-    {
-      client,
-      model,
-      tools,
-      projectRoot,
-      context,
-      skills: deps.skills,
-      reasoningEffort: deps.config.reasoningEffort(modelKey(model)),
-      signal: controller.signal,
-      onEvent: onEvent,
-    },
-    withSystem,
-  )
-  process.off("SIGINT", onSigint)
+  startSpinner("thinking")
+  let result: AgentTurnResult
+  try {
+    result = await runAgentTurn(
+      {
+        client,
+        model,
+        tools,
+        projectRoot,
+        context,
+        skills: deps.skills,
+        reasoningEffort: deps.config.reasoningEffort(modelKey(model)),
+        signal: controller.signal,
+        fallback: failover,
+        onEvent: onEvent,
+      },
+      withSystem,
+    )
+  } finally {
+    stopSpinner()
+    process.off("SIGINT", onSigint)
+  }
 
   if (result.error) {
-    await reportError(result.error, deps, model)
+    await reportError(result.error, deps, deps.state.model)
   } else if (result.stoppedReason === "max_steps") {
-    warnLine(`stopped after ${40} tool steps to stay within budget`)
+    warnLine(`stopped after ${DEFAULT_MAX_STEPS} tool steps to stay within budget`)
   }
 
-  // Persist the assistant side of the conversation, minus the system prompt.
-  for (const message of result.added) {
-    if (message.role === "system") continue
-    if (message.role === "assistant") {
-      const text = messageText(message)
-      const calls = message.toolCalls ?? []
-      if (!text.trim() && calls.length === 0) continue
-      sessions.append(session, {
-        role: "assistant",
-        content: text,
-        toolCalls: calls.length
-          ? calls.map((call) => ({ id: call.id, name: call.name, arguments: call.arguments }))
-          : undefined,
-        model: model.id,
-        provider: model.providerID,
-        tokensIn: result.usage.inputTokens,
-        tokensOut: result.usage.outputTokens,
-        cost: result.usage.cost,
-        timestamp: Date.now(),
-      })
-    } else if (message.role === "tool") {
-      sessions.append(session, {
-        role: "tool",
-        content: messageText(message),
-        tool: message.name,
-        toolCallId: message.toolCallId,
-        timestamp: Date.now(),
-      })
-    }
-  }
+  // The messages of the turn, each with the usage of the call that made it.
+  sessions.appendTurnMessages(session, result.added, result.steps)
+
+  // Why the turn ended, and what the whole turn cost.
+  sessions.appendTurn(session, {
+    stoppedReason: result.stoppedReason,
+    errorKind: result.error?.kind,
+    errorMessage: result.error?.message,
+    usage: result.usage,
+  })
 
   // Replace the in-memory history with what the provider expects next time.
   messages.length = 0
@@ -341,9 +353,17 @@ function writeReasoning(text: string): void {
   }
 }
 
+/**
+ * Write one event of the turn to the terminal.
+ *
+ * The spinner stops before anything is written, so the line it drew is
+ * cleared first and the output is not written over it.
+ */
 function onEvent(event: import("../agent/agent.js").AgentEvent): void {
   switch (event.type) {
     case "assistant_text":
+      // The reply is on screen, so the spinner has done its job.
+      stopSpinner()
       if (event.partial && event.text) {
         if (!assistantStreaming) {
           endReasoning()
@@ -359,6 +379,7 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
       }
       break
     case "reasoning":
+      stopSpinner()
       if (event.text) {
         if (!reasoningOpen) {
           endAssistantStream()
@@ -371,17 +392,24 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
       }
       break
     case "tool_start":
+      stopSpinner()
       endReasoning()
       endAssistantStream()
       toolLine(event.tool ?? "?", event.args)
+      startSpinner(`running ${event.tool ?? "tool"}`)
       break
     case "tool_end":
+      stopSpinner()
       if (event.result) toolResultLine(event.result.output, event.result.isError === true)
+      startSpinner("thinking")
       break
     case "notice":
+      stopSpinner()
       if (event.text) warnLine(event.text)
+      startSpinner("thinking")
       break
     case "error":
+      stopSpinner()
       break
     default:
       break

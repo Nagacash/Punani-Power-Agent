@@ -1,9 +1,10 @@
 import path from "node:path"
 import fs from "node:fs"
+import { log } from "../core/logger.js"
 import type { ChatClient, ChatMessage, ToolCall } from "../llm/client.js"
 import { LlmError } from "../llm/errors.js"
 import type { ModelInfo } from "../provider/types.js"
-import { estimateCost } from "../provider/types.js"
+import { estimateCost, modelKey } from "../provider/types.js"
 import { toDefinition, type Tool, type ToolContext, type ToolResult } from "../tool/types.js"
 import { compactConversation, shouldCompact } from "./compact.js"
 import type { Skill } from "../skills/loader.js"
@@ -131,6 +132,23 @@ export interface AgentEvent {
   usage?: { inputTokens: number; outputTokens: number; cost: number }
 }
 
+/** A client and model to carry on with after a provider refused the request. */
+export interface AgentFallbackResult {
+  client: ChatClient
+  model: ModelInfo
+}
+
+/**
+ * Called when a provider throttles the request.
+ *
+ * It returns where to go next, or nothing when there is nowhere to go. The
+ * turn then fails the way it would have without a fallback.
+ */
+export type AgentFallback = (
+  error: LlmError,
+  failed: ModelInfo,
+) => Promise<AgentFallbackResult | undefined>
+
 export interface AgentOptions {
   client: ChatClient
   model: ModelInfo
@@ -145,7 +163,20 @@ export interface AgentOptions {
   compactionLimit?: number
   maxSteps?: number
   signal?: AbortSignal
+  /** Moves the turn to another model when the provider refuses the request. */
+  fallback?: AgentFallback
   onEvent?: (event: AgentEvent) => void
+}
+
+/** What one model call cost. */
+export interface AgentStepUsage {
+  inputTokens: number
+  outputTokens: number
+  cost: number
+  /** The model that took the call. */
+  model: string
+  /** The provider it came from. */
+  provider: string
 }
 
 export interface AgentTurnResult {
@@ -156,7 +187,16 @@ export interface AgentTurnResult {
    * here, so a session log does not record the same answer twice.
    */
   added: ChatMessage[]
+  /** The cost of the whole turn. */
   usage: { inputTokens: number; outputTokens: number; cost: number }
+  /**
+   * The usage of each model call, in the order the calls happened. One
+   * entry per answer, so a transcript can say what each step cost instead
+   * of the turn total on every line.
+   */
+  steps: AgentStepUsage[]
+  /** What the summary call cost, when the conversation was folded. */
+  compaction?: AgentStepUsage
   stoppedReason: "finished" | "max_steps" | "aborted" | "error"
   error?: LlmError
 }
@@ -167,29 +207,86 @@ export interface AgentTurnResult {
  * Sends the conversation to the model, runs whatever tools it asks for, feeds
  * the results back, and repeats until the model answers without asking for a
  * tool. Tool failures are reported back to the model rather than aborting the
- * turn, so the model can correct itself.
+ * turn, so the model can correct itself. A provider that refuses the request
+ * hands the turn to another model rather than ending it.
  */
+
+/** How many providers one turn may try before it gives up. */
+const MAX_SWITCHES = 3
+
+/** How many tool rounds one turn may take before it stops. */
+export const DEFAULT_MAX_STEPS = 40
+
 export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]): Promise<AgentTurnResult> {
-  const { client, model, tools, context, signal } = options
-  const maxSteps = options.maxSteps ?? 40
+  const { tools, context, signal } = options
+  // The model and its client can change mid-turn, when a provider throttles.
+  let client = options.client
+  let model = options.model
+  const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]))
   const messages: ChatMessage[] = [...history]
   let inputTokens = 0
   let outputTokens = 0
+  let cost = 0
+  let switches = 0
   // What the turn actually did, so a skill's receipts can be checked.
   const turn: TurnState = { loadedSkills: [], toolsUsed: new Set() }
   // The messages this turn produced, for the session log.
   const added: ChatMessage[] = []
+  // What each model call cost, so the transcript can say so per step.
+  const steps: AgentStepUsage[] = []
+  let compaction: AgentStepUsage | undefined
+  const usage = () => ({ inputTokens, outputTokens, cost })
+
+  /**
+   * Move the turn to another model when the provider refuses the request.
+   *
+   * A throttle and an unreachable provider qualify: neither is a failure of
+   * the task. A wrong key or a bad request does not, because it fails the
+   * same way on every provider, and switching would only hide the problem.
+   */
+  async function switchModel(error: LlmError): Promise<boolean> {
+    if (!options.fallback) return false
+    if (signal?.aborted) return false
+    if (error.kind !== "rate_limit" && error.kind !== "quota" && error.kind !== "network") return false
+    if (switches >= MAX_SWITCHES) return false
+    const from = model
+    const next = await options.fallback(error, from)
+    if (!next) return false
+    switches++
+    client = next.client
+    model = next.model
+    options.onEvent?.({
+      type: "notice",
+      text: `${error.title} on ${modelKey(from)}. Carrying on with ${modelKey(model)}.`,
+    })
+    return true
+  }
 
   for (let step = 0; step < maxSteps; step++) {
     if (signal?.aborted) {
-      return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "aborted" }
+      return { messages, added, usage: usage(), steps, compaction, stoppedReason: "aborted" }
     }
 
     // A conversation that has grown past the limit is folded into a summary,
     // so the next turn still fits and still costs what it should.
     if (shouldCompact(messages, model, options.compactionLimit ?? 0.5)) {
       const folded = await compactConversation(client, model, messages)
+      if (folded.usage) {
+        // The summary is a model call too, and it costs tokens. A long turn
+        // can fold more than once, so the calls add up.
+        const summaryCost = estimateCost(model.cost, folded.usage.inputTokens, folded.usage.outputTokens)
+        inputTokens += folded.usage.inputTokens
+        outputTokens += folded.usage.outputTokens
+        cost += summaryCost
+        compaction = {
+          inputTokens: (compaction?.inputTokens ?? 0) + folded.usage.inputTokens,
+          outputTokens: (compaction?.outputTokens ?? 0) + folded.usage.outputTokens,
+          cost: (compaction?.cost ?? 0) + summaryCost,
+          model: model.id,
+          provider: model.providerID,
+        }
+      }
       if (folded.folded > 0) {
         messages.length = 0
         messages.push(...folded.messages)
@@ -224,6 +321,11 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
           : undefined,
       })
     } catch (error) {
+      // A cancelled request is not a failure. The turn was stopped on
+      // purpose, so it ends as an abort and not as an error.
+      if (signal?.aborted) {
+        return { messages, added, usage: usage(), steps, compaction, stoppedReason: "aborted" }
+      }
       const llmError =
         error instanceof LlmError
           ? error
@@ -233,12 +335,29 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
               providerID: model.providerID,
               modelID: model.id,
             })
+      // A throttle is not a failure of the task. Move the turn to a model
+      // that can answer, and carry on with the same conversation.
+      if (await switchModel(llmError)) continue
+      // The turn is over and the reason is not in the transcript. Write it
+      // down, or nobody can tell later why the run stopped.
+      log.error(
+        `turn failed on ${llmError.providerID}/${llmError.modelID}: ${llmError.kind} — ${llmError.message}`,
+      )
       options.onEvent?.({ type: "error", error: llmError })
-      return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "error", error: llmError }
+      return { messages, added, usage: usage(), steps, compaction, stoppedReason: "error", error: llmError }
     }
 
     inputTokens += completion.usage.inputTokens
     outputTokens += completion.usage.outputTokens
+    const stepCost = estimateCost(model.cost, completion.usage.inputTokens, completion.usage.outputTokens)
+    cost += stepCost
+    steps.push({
+      inputTokens: completion.usage.inputTokens,
+      outputTokens: completion.usage.outputTokens,
+      cost: stepCost,
+      model: model.id,
+      provider: model.providerID,
+    })
 
     const assistantMessage: ChatMessage = {
       role: "assistant",
@@ -255,21 +374,22 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
     }
 
     if (completion.toolCalls.length === 0) {
-      options.onEvent?.({ type: "usage", usage: usageOf(inputTokens, outputTokens, model) })
+      options.onEvent?.({ type: "usage", usage: usage() })
       checkReceipts(options, turn.loadedSkills, turn.toolsUsed)
-      return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "finished" }
+      return { messages, added, usage: usage(), steps, compaction, stoppedReason: "finished" }
     }
 
     for (const call of completion.toolCalls) {
-      await runToolCall(call, toolMap, context, messages, options, turn, added)
+      await runToolCall(call, toolMap, context, messages, options, turn, added, model)
       if (signal?.aborted) {
-        return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "aborted" }
+        return { messages, added, usage: usage(), steps, compaction, stoppedReason: "aborted" }
       }
     }
   }
 
-  options.onEvent?.({ type: "usage", usage: usageOf(inputTokens, outputTokens, model) })
-  return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "max_steps" }
+  log.warn(`turn stopped after ${maxSteps} tool steps, to stay within budget`)
+  options.onEvent?.({ type: "usage", usage: usage() })
+  return { messages, added, usage: usage(), steps, compaction, stoppedReason: "max_steps" }
 }
 
 /** What the turn did, so a skill's receipts can be checked at the end. */
@@ -280,6 +400,10 @@ interface TurnState {
   toolsUsed: Set<string>
 }
 
+/**
+ * Run one tool the model asked for, and put the result back in the
+ * conversation so the model can answer with it.
+ */
 async function runToolCall(
   call: ToolCall,
   toolMap: Map<string, Tool>,
@@ -288,8 +412,8 @@ async function runToolCall(
   options: AgentOptions,
   turn: TurnState,
   added: ChatMessage[],
+  model: ModelInfo,
 ): Promise<void> {
-  const model = options.model
   const emit = options.onEvent
   let args: any = {}
   try {
@@ -377,10 +501,6 @@ function checkReceipts(options: AgentOptions, loaded: string[], used: Set<string
       text: `The ${skill.name} skill asked for ${missing.join(", ")}, and the turn did not use ${missing.length === 1 ? "it" : "them"}.`,
     })
   }
-}
-
-function usageOf(inputTokens: number, outputTokens: number, model: ModelInfo) {
-  return { inputTokens, outputTokens, cost: estimateCost(model.cost, inputTokens, outputTokens) }
 }
 
 /** Collect the project context shown in the header: name, git branch, file count. */
