@@ -23,7 +23,7 @@ import { createClient } from "../llm/factory.js"
 import { createFailover } from "../provider/failover.js"
 import { diffLines } from "../tool/diff.js"
 import { diskMutate } from "../tool/fsutil.js"
-import { messageText, type ChatMessage } from "../llm/client.js"
+import { messageText, type ChatMessage, type ContentPart } from "../llm/client.js"
 import type { ModelInfo } from "../provider/types.js"
 import type { Tool, ToolContext } from "../tool/types.js"
 import { EventHub, PermissionQueue } from "./events.js"
@@ -212,7 +212,7 @@ export class WebServer {
   private busy = false
   private abort?: AbortController
   /** Follow-up prompts sent while a turn is still running. */
-  private readonly messageQueue: string[] = []
+  private readonly messageQueue: { text: string; images: AttachedImage[] }[] = []
   /** After abort, drop the in-flight user message and partial reply. */
   private revertAfterAbort = false
   /** Invalidates stale forced-stop timers when a new run or abort starts. */
@@ -1019,13 +1019,18 @@ export class WebServer {
     url: URL,
   ): Promise<void> {
     const route = url.pathname.replace("/api/", "")
-    const body = request.method === "POST" ? await readJson(request) : {}
+    // A message can carry pictures, so it gets a bigger body than the rest.
+    const limit = url.pathname === "/api/message" ? MAX_MESSAGE_BYTES : MAX_BODY_BYTES
+    const body = request.method === "POST" ? await readJson(request, limit) : {}
 
     switch (route) {
       case "state":
         return json(response, this.snapshot())
       case "message":
-        return json(response, await this.startTurn(String(body.text ?? "")))
+        return json(
+          response,
+          await this.startTurn(String(body.text ?? ""), readImages(body.images)),
+        )
       case "revert-user":
         return json(response, this.revertLastUserMessage())
       case "permission":
@@ -1161,11 +1166,11 @@ export class WebServer {
     }
   }
 
-  private async startTurn(text: string): Promise<unknown> {
-    if (!text.trim()) return { error: "empty message" }
+  private async startTurn(text: string, images: AttachedImage[] = []): Promise<unknown> {
+    if (!text.trim() && images.length === 0) return { error: "empty message" }
 
     if (this.busy) {
-      this.messageQueue.push(text.trim())
+      this.messageQueue.push({ text: text.trim(), images })
       this.hub.send({ type: "user", text: text.trim(), queued: true })
       this.hub.send({
         type: "notice",
@@ -1180,6 +1185,11 @@ export class WebServer {
 
     if (!this.model) {
       const msg = "no model is configured yet. Pick one in the model picker."
+      this.hub.send({ type: "notice", text: msg })
+      return { error: msg }
+    }
+    if (images.length > 0 && !this.model.vision) {
+      const msg = `${this.model.name} cannot see pictures. Pick a model that can, or describe the picture.`
       this.hub.send({ type: "notice", text: msg })
       return { error: msg }
     }
@@ -1202,8 +1212,12 @@ export class WebServer {
     this.hub.send({ type: "state", ...this.snapshot() })
     this.hub.send({ type: "user", text })
 
-    this.sessions.append(this.session, { role: "user", content: text, timestamp: Date.now() })
-    this.messages.push({ role: "user", content: text })
+    this.sessions.append(this.session, {
+      role: "user",
+      content: transcriptOf(text, images),
+      timestamp: Date.now(),
+    })
+    this.messages.push({ role: "user", content: messageOf(text, images) })
 
     // The turn runs in the background. Everything it produces arrives over the
     // event stream, so the request that started it can return immediately.
@@ -1420,7 +1434,7 @@ export class WebServer {
 
   private drainMessageQueue(): void {
     const next = this.messageQueue.shift()
-    if (next) void this.startTurn(next)
+    if (next) void this.startTurn(next.text, next.images)
   }
 
   private requestAbort(): { ok: true } {
@@ -1583,15 +1597,73 @@ function json(response: http.ServerResponse, payload: unknown, status = 200): vo
   response.end(JSON.stringify(payload))
 }
 
+/**
+ * An image the user attached to a message.
+ *
+ * It travels as a data URL, because that is what the model providers take.
+ */
+export interface AttachedImage {
+  url: string
+  mime: string
+  bytes: number
+}
+
+/** The most one image may weigh, the same limit the read tool has. */
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024
+/** The most images one message may carry. */
+const MAX_IMAGES = 6
+
+/**
+ * Read the images out of a request.
+ *
+ * A data URL that is not an image, or that is too big, is dropped rather
+ * than passed on: the provider would refuse it, and a refusal in the middle
+ * of a conversation is worse than a missing picture.
+ */
+export function readImages(value: unknown): AttachedImage[] {
+  if (!Array.isArray(value)) return []
+  const out: AttachedImage[] = []
+  for (const item of value) {
+    if (typeof item !== "string") continue
+    const match = item.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/s)
+    if (!match) continue
+    const mime = match[1]!
+    const base64 = match[2]!
+    const bytes = Math.floor((base64.length * 3) / 4)
+    if (bytes > MAX_IMAGE_BYTES) continue
+    if (out.length >= MAX_IMAGES) break
+    out.push({ url: `data:${mime};base64,${base64}`, mime, bytes })
+  }
+  return out
+}
+
+/** The message the model sees: the text, and the pictures with it. */
+export function messageOf(text: string, images: AttachedImage[]): string | ContentPart[] {
+  if (images.length === 0) return text
+  return [
+    ...(text.trim() ? [{ type: "text" as const, text }] : []),
+    ...images.map((image) => ({ type: "image_url" as const, image_url: { url: image.url } })),
+  ]
+}
+
+/** What the transcript keeps: the text, and a note that pictures came with it. */
+export function transcriptOf(text: string, images: AttachedImage[]): string {
+  if (images.length === 0) return text
+  const note = `[${images.length} image${images.length === 1 ? "" : "s"} attached]`
+  return text.trim() ? `${note}\n${text}` : note
+}
+
 /** A request body is small. Anything larger is not a request we want. */
 const MAX_BODY_BYTES = 1024 * 1024
+/** A message with pictures in it is bigger. */
+const MAX_MESSAGE_BYTES = 32 * 1024 * 1024
 
-async function readJson(request: http.IncomingMessage): Promise<any> {
+async function readJson(request: http.IncomingMessage, limit = MAX_BODY_BYTES): Promise<any> {
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     size += (chunk as Buffer).length
-    if (size > MAX_BODY_BYTES) {
+    if (size > limit) {
       request.destroy()
       return {}
     }
