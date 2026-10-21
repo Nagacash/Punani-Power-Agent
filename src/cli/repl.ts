@@ -47,6 +47,8 @@ import {
   warnLine,
 } from "../ui/render.js"
 import { interpretPermissionReply, renderDiff, renderPermissionRequest } from "../ui/prompt.js"
+import { initProjectFiles } from "./commands/project.js"
+import { collectReviewDiff, reviewPrompt } from "./commands/review.js"
 import { startSpinner, stopSpinner } from "../ui/spinner.js"
 import { login as klingLogin, whoAmI as klingWhoAmI } from "../provider/kling.js"
 import {
@@ -75,8 +77,21 @@ export interface AppDeps {
    * then not printed again, so it does not appear twice.
    */
   echoesInput?: boolean
-  /** Mutable so /model can switch models mid-session. */
-  state: { model: ModelInfo; providerName: string }
+  /** Mutable, so the commands can switch models, sessions and projects. */
+  state: {
+    model: ModelInfo
+    providerName: string
+    /** The session the transcript is written to. */
+    session: SessionMeta
+    /** The conversation so far, without the system prompt. */
+    messages: ChatMessage[]
+    /** The tools the agent may use. Rebuilt when the project moves. */
+    tools: Tool[]
+  }
+  /** The MCP tools, so the tool set can be rebuilt when the project moves. */
+  mcpTools?: Tool[]
+  /** The routing table, rebuilt when the project moves. */
+  routes?: Route[]
   /** An existing session to reopen, when the user asked to resume one. */
   resume?: { meta: SessionMeta; messages: ChatMessage[] }
   /** The skill library, filled in when the app starts. */
@@ -86,70 +101,33 @@ export interface AppDeps {
 }
 
 export async function startApp(deps: AppDeps): Promise<void> {
-  const { config, sessions, projectRoot, ask } = deps
+  const { config, sessions, ask } = deps
   const permissions = new PermissionEngine(config.permissions())
-  const session = deps.resume?.meta ?? sessions.create(projectRoot, deps.state.model.id, deps.state.model.providerID)
-  const info = describeProject(projectRoot)
+  // The session and the conversation are already open. The app fills in the
+  // rest, and the commands can replace them afterwards.
+  const session = deps.state.session
+  const info = describeProject(deps.projectRoot)
 
   banner(
     APP_TITLE,
     `${info.name}${info.branch ? ` (${info.branch}${info.dirty ? "*" : ""})` : ""} · session ${session.id.slice(4, 12)}`,
   )
   modelBanner(deps.state.model, deps.state.providerName)
-  infoLine(`project ${projectRoot}`)
+  infoLine(`project ${deps.projectRoot}`)
   infoLine(`config ${config.path}`)
   if (deps.resume) {
     infoLine(`resumed ${deps.resume.messages.length} earlier messages`)
   }
   infoLine("Type /help for commands, /exit to quit.")
 
-  const messages: ChatMessage[] = [...(deps.resume?.messages ?? [])]
-  const imageSettings = config.imageSettings()
-  const audioSettings = config.audioSettings()
-  const instructions = loadProjectInstructions(projectRoot)
-  if (instructions.files.length > 0) {
-    infoLine(`following ${instructions.files.join(", ")}`)
-  }
-
-  // Skills: a table of contents, not a wall of descriptions.
-  const skillRoots = defaultRoots(projectRoot)
-  const skills = discoverSkills(skillRoots)
-  const groups = groupSkills(skills)
-  const catalog = renderGroupIndex(groups)
-  deps.skills = skills
-  if (groups.length > 0) {
-    infoLine(`${skills.length} skill(s) in ${groups.length} group(s) available`)
-  }
-
-  // The always-on surface: rules, guidance and memory, kept in files.
-  const alwaysOn = loadAlwaysOn(projectRoot)
-  if (alwaysOn.files.length > 0) {
-    infoLine(`always on: ${alwaysOn.files.map((file) => file.name).join(", ")}`)
-  }
-
-  // The routing table: which skill answers which situation.
-  const routes = buildRoutes(projectRoot, skills)
-  const routeTable = renderRoutes(routes)
-  if (routes.length > 0) {
-    infoLine(`${routes.length} route(s) in the skill table`)
-  }
-
-  // The prompt, apart from the rules that are written in code.
-  deps.promptParts = {
-    catalog,
-    instructions: instructions.text,
-    routes: routeTable,
-    alwaysOn: renderAlwaysOn(alwaysOn),
-  }
-
   // Start the MCP servers and fold their tools into the agent's tool set.
   const mcp = new McpRegistry(config.mcpServers())
-  const mcpTools = await mcp.start()
+  deps.mcpTools = await mcp.start()
   for (const problem of mcp.problems) warnLine(`mcp: ${problem}`)
-  if (mcpTools.length > 0) {
-    infoLine(`${mcpTools.length} tool(s) from ${mcp.connected.length} MCP server(s)`)
+  if (deps.mcpTools.length > 0) {
+    infoLine(`${deps.mcpTools.length} tool(s) from ${mcp.connected.length} MCP server(s)`)
   }
-  const tools = [...buildTools(imageSettings, audioSettings, mcpTools), ...createSkillTools(groups, skills)]
+  deps.state.tools = loadProject(deps, deps.projectRoot)
 
   while (true) {
     let line: string
@@ -162,33 +140,87 @@ export async function startApp(deps: AppDeps): Promise<void> {
     if (input === "") continue
 
     if (input.startsWith("/")) {
-      const handled = await handleCommand(input, deps, session, messages, permissions, catalog, skills, routes)
+      const handled = await handleCommand(input, deps, permissions)
       if (handled === "exit") break
+      // A command can ask for a turn of its own, like /review does.
+      if (typeof handled === "object" && handled.turn) {
+        if (!deps.echoesInput) userLine(handled.turn)
+        sessions.append(deps.state.session, { role: "user", content: handled.turn, timestamp: Date.now() })
+        deps.state.messages.push({ role: "user", content: handled.turn })
+        await runTurn(deps, permissions)
+      }
       continue
     }
 
     if (!deps.echoesInput) {
       userLine(input)
     }
-    sessions.append(session, { role: "user", content: input, timestamp: Date.now() })
-    messages.push({ role: "user", content: input })
+    sessions.append(deps.state.session, { role: "user", content: input, timestamp: Date.now() })
+    deps.state.messages.push({ role: "user", content: input })
 
-    await runTurn(deps, session, messages, permissions, tools)
+    await runTurn(deps, permissions)
   }
 
   infoLine("bye")
 }
 
+/**
+ * Read everything that belongs to the project.
+ *
+ * The instructions, the always-on files and the skills all come from the
+ * project, so moving to another project means reading them again. The tools
+ * are rebuilt with them, and the new set replaces the old one.
+ */
+function loadProject(deps: AppDeps, root: string): Tool[] {
+  const { config } = deps
+  const instructions = loadProjectInstructions(root)
+  if (instructions.files.length > 0) {
+    infoLine(`following ${instructions.files.join(", ")}`)
+  }
+
+  // Skills: a table of contents, not a wall of descriptions.
+  const skills = discoverSkills(defaultRoots(root))
+  const groups = groupSkills(skills)
+  const catalog = renderGroupIndex(groups)
+  deps.skills = skills
+  if (groups.length > 0) {
+    infoLine(`${skills.length} skill(s) in ${groups.length} group(s) available`)
+  }
+
+  // The always-on surface: rules, guidance and memory, kept in files.
+  const alwaysOn = loadAlwaysOn(root)
+  if (alwaysOn.files.length > 0) {
+    infoLine(`always on: ${alwaysOn.files.map((file) => file.name).join(", ")}`)
+  }
+
+  // The routing table: which skill answers which situation.
+  const routes = buildRoutes(root, skills)
+  deps.routes = routes
+  if (routes.length > 0) {
+    infoLine(`${routes.length} route(s) in the skill table`)
+  }
+
+  // The prompt, apart from the rules that are written in code.
+  deps.promptParts = {
+    catalog,
+    instructions: instructions.text,
+    routes: renderRoutes(routes),
+    alwaysOn: renderAlwaysOn(alwaysOn),
+  }
+
+  return [
+    ...buildTools(config.imageSettings(), config.audioSettings(), deps.mcpTools ?? []),
+    ...createSkillTools(groups, skills),
+  ]
+}
+
 /** Run one agent turn and record the result in the session. */
-async function runTurn(
-  deps: AppDeps,
-  session: SessionMeta,
-  messages: ChatMessage[],
-  permissions: PermissionEngine,
-  tools: Tool[],
-): Promise<void> {
+async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<void> {
   const { registry, projectRoot, ask, sessions } = deps
   const model = deps.state.model
+  const session = deps.state.session
+  const messages = deps.state.messages
+  const tools = deps.state.tools
 
   const provider = registry.providers().find((entry) => entry.id === model.providerID)
   if (!provider) {
@@ -456,13 +488,8 @@ function rest0(argument: string): string[] {
 async function handleCommand(
   input: string,
   deps: AppDeps,
-  session: SessionMeta,
-  messages: ChatMessage[],
   permissions: PermissionEngine,
-  catalog: string,
-  skills: Skill[],
-  routes: Route[],
-): Promise<"exit" | "handled"> {
+): Promise<"exit" | "handled" | { turn: string }> {
   const [command, ...rest] = input.slice(1).split(/\s+/)
   const argument = rest.join(" ")
   const { config, registry, sessions, ask, askSecret } = deps
@@ -476,6 +503,73 @@ async function handleCommand(
     case "exit":
     case "quit":
       return "exit"
+
+    case "init": {
+      // The project files the agent reads on every turn.
+      const { written, kept } = initProjectFiles(deps.projectRoot)
+      if (written.length > 0) {
+        successLine(`wrote ${written.map((name) => `.punani/${name}`).join(", ")}`)
+      } else {
+        infoLine("the project files are already there")
+      }
+      for (const name of kept) infoLine(`kept .punani/${name}`)
+      infoLine("the agent reads these on every turn. Edit them, or ask it to fill them in.")
+      return "handled"
+    }
+
+    case "new": {
+      const session = sessions.create(deps.projectRoot, deps.state.model.id, deps.state.model.providerID)
+      deps.state.session = session
+      deps.state.messages = []
+      infoLine(`new session ${session.id.slice(4, 12)}`)
+      return "handled"
+    }
+
+    case "rename": {
+      if (!argument) {
+        infoLine(`this session is called "${deps.state.session.title}"`)
+        return "handled"
+      }
+      sessions.rename(deps.state.session, argument)
+      successLine(`renamed to "${deps.state.session.title}"`)
+      return "handled"
+    }
+
+    case "fork": {
+      const fork = sessions.fork(deps.state.session)
+      deps.state.session = fork
+      deps.state.messages = [...deps.state.messages]
+      successLine(`forked into session ${fork.id.slice(4, 12)}, with the same conversation`)
+      return "handled"
+    }
+
+    case "move": {
+      if (!argument) {
+        infoLine(`this project is ${deps.projectRoot}`)
+        return "handled"
+      }
+      const target = path.resolve(deps.projectRoot, argument)
+      if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
+        errorLine(`no directory at ${target}`)
+        return "handled"
+      }
+      deps.projectRoot = target
+      deps.state.session.projectRoot = target
+      sessions.save(deps.state.session)
+      deps.state.tools = loadProject(deps, target)
+      successLine(`moved to ${target}`)
+      return "handled"
+    }
+
+    case "review": {
+      const target = collectReviewDiff(deps.projectRoot, argument)
+      if (target.error) {
+        errorLine(target.error)
+        return "handled"
+      }
+      if (target.truncated) warnLine("the diff was long and was cut short")
+      return { turn: reviewPrompt(target) }
+    }
 
     case "models": {
       // "free" filters to zero-cost models; a provider id narrows to one
@@ -735,6 +829,8 @@ async function handleCommand(
 
     case "skill": {
       // The picker: search the library, or show the routing table.
+      const skills = deps.skills ?? []
+      const routes = deps.routes ?? []
       const [action, ...rest] = rest0(argument)
       if (!action) {
         infoLine(`${skills.length} skill(s) available`)
@@ -1078,14 +1174,16 @@ async function handleCommand(
     }
 
     case "session": {
+      const session = deps.state.session
       infoLine(`session id: ${session.id}`)
+      infoLine(`name: ${session.title}`)
       infoLine(`messages: ${session.messageCount}`)
       infoLine(`project: ${session.projectRoot}`)
       return "handled"
     }
 
     case "clear": {
-      messages.length = 0
+      deps.state.messages = []
       successLine("conversation cleared")
       return "handled"
     }
@@ -1099,7 +1197,7 @@ async function handleCommand(
           audio: deps.config.audioSettings().provider !== "none",
           vision: model.vision,
         },
-        deps.promptParts ?? { catalog },
+        deps.promptParts ?? { catalog: "" },
       )
       process.stdout.write(`${style.gray(system)}\n`)
       return "handled"
@@ -1122,6 +1220,12 @@ async function handleCommand(
 /** Every command, with the line that explains it. */
 const COMMANDS: [string, string][] = [
     ["/help", "show this list"],
+    ["/init", "write the project files the agent reads on every turn"],
+    ["/new", "start a new session"],
+    ["/rename <title>", "name this session"],
+    ["/fork", "copy this session and carry on in the copy"],
+    ["/move <dir>", "move to another project directory"],
+    ["/review [commit|branch|pr]", "review the changes, the uncommitted ones by default"],
     ["/models [filter]", "list models, optionally filtered by a provider or substring"],
     ["/model <provider/model>", "set the default model"],
     ["/reasoning <level>", "how hard the model is asked to think"],

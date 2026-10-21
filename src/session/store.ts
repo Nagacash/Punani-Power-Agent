@@ -94,7 +94,7 @@ export class SessionStore {
       messageCount: 0,
     }
     fs.writeFileSync(this.file(id), "", { mode: 0o600 })
-    this.writeIndex()
+    this.writeIndex(meta)
     return meta
   }
 
@@ -106,7 +106,7 @@ export class SessionStore {
     if (meta.title === "New session" && message.role === "user" && message.content.trim()) {
       meta.title = message.content.trim().split("\n")[0]!.slice(0, 80)
     }
-    this.writeIndex()
+    this.writeIndex(meta)
   }
 
   /**
@@ -194,6 +194,35 @@ export class SessionStore {
     })
   }
 
+  /** Give the session a name of its own. */
+  rename(meta: SessionMeta, title: string): void {
+    const clean = title.trim().replace(/\s+/g, " ").slice(0, 80)
+    if (!clean) return
+    meta.title = clean
+    meta.updated = Date.now()
+    this.writeIndex(meta)
+  }
+
+  /**
+   * Copy the session into a new one.
+   *
+   * The fork starts with the same transcript, so the work can be carried on
+   * in another direction without losing what came before it.
+   */
+  fork(meta: SessionMeta): SessionMeta {
+    const stored = this.read(meta.id)
+    const forkMeta = this.create(meta.projectRoot, meta.model, meta.provider)
+    forkMeta.title = `${meta.title} (fork)`
+    this.rewrite(forkMeta, stored?.messages ?? [])
+    return forkMeta
+  }
+
+  /** Write the index, so a change to the meta lands on disk. */
+  save(meta: SessionMeta): void {
+    meta.updated = Date.now()
+    this.writeIndex(meta)
+  }
+
   /** Replace the on-disk transcript (for edit / revert in the browser). */
   rewrite(meta: SessionMeta, messages: SessionMessage[]): void {
     this.ensureDir()
@@ -201,7 +230,7 @@ export class SessionStore {
     fs.writeFileSync(this.file(meta.id), body, { mode: 0o600 })
     meta.updated = Date.now()
     meta.messageCount = messages.length
-    this.writeIndex()
+    this.writeIndex(meta)
   }
 
   read(id: string): StoredSession | undefined {
@@ -239,10 +268,21 @@ export class SessionStore {
     }
   }
 
-  private writeIndex(): void {
+  /**
+   * Write the index.
+   *
+   * The session that was just written goes into the index, so the list of
+   * sessions knows about it, and about every change to it.
+   */
+  private writeIndex(meta?: SessionMeta): void {
     try {
       this.ensureDir()
       const index = this.index()
+      if (meta) {
+        const at = index.findIndex((entry) => entry.id === meta.id)
+        if (at >= 0) index[at] = { ...meta }
+        else index.push({ ...meta })
+      }
       fs.writeFileSync(this.indexFile(), JSON.stringify(index, null, 2), { mode: 0o600 })
     } catch {
       /* index is a convenience, not a requirement */
