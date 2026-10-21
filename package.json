@@ -1,6 +1,6 @@
 {
   "name": "punani-powerd",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Punani powerd by Naga Codex - a terminal and browser AI coding agent with multi-provider model support, permissions, diffs and live preview",
   "license": "MIT",
   "type": "module",
