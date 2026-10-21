@@ -1144,12 +1144,23 @@
         add(el);
       }
 
+      // The dangerous half of a tool has its own action, so the card says
+      // what is about to happen rather than which rule fired.
+      function permissionLabel(action) {
+        switch (action) {
+          case "write-destructive": return "write (replaces)";
+          case "edit-destructive": return "edit (rewrites)";
+          case "bash-destructive": return "bash (destructive)";
+          default: return String(action || "");
+        }
+      }
+
       function permissionCard(ev) {
         const el = document.createElement("div");
         el.className = "perm";
         el.innerHTML = `
           <div class="core">
-            <div class="band"><span class="act">${esc(ev.action)}</span><span>needs your approval</span></div>
+            <div class="band"><span class="act">${esc(permissionLabel(ev.action))}</span><span>needs your approval</span></div>
             <div class="body">
               <div class="sum">${esc(ev.summary)}</div>
               ${ev.destructive ? `<div class="danger">&#9888; This action can destroy or overwrite data.</div>` : ""}

@@ -149,7 +149,7 @@ export const devTool: Tool = {
     }
 
     const outcome = await context.requestPermission({
-      action: "bash",
+      action: isDestructiveCommand(command) ? "bash-destructive" : "bash",
       resource: command,
       summary: `Run in the background: ${command}`,
       detail:

@@ -1124,13 +1124,23 @@ async function handleCommand(
 
     case "permissions": {
       if (!argument) {
-        for (const action of ["read", "search", "write", "edit", "bash"]) {
+        for (const action of [
+          "read",
+          "search",
+          "write",
+          "edit",
+          "bash",
+          "write-destructive",
+          "edit-destructive",
+          "bash-destructive",
+        ]) {
           const rules = permissions.effectiveRules(action)
           process.stdout.write(
-            `  ${style.bold(action.padEnd(8))} ${rules.map((rule) => `${rule.pattern}=${rule.effect}`).join("  ")}\n`,
+            `  ${style.bold(action.padEnd(18))} ${rules.map((rule) => `${rule.pattern}=${rule.effect}`).join("  ")}\n`,
           )
         }
         infoLine("change with: /permissions <action> <pattern> <allow|ask|deny>")
+        infoLine("the ordinary actions go through; the destructive ones ask")
         return "handled"
       }
       const [action, pattern, effect] = argument.split(/\s+/)
