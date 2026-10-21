@@ -167,8 +167,9 @@ export function isRewrite(before: string, after: string): boolean {
   const { deletions } = diffStats(before, after)
   if (deletions === 0) return false
   const lines = before.split("\n").length
-  // A small file is not a rewrite: a line here and there is the whole work.
-  if (lines < 10) return false
+  if (lines < 10) {
+    return deletions >= Math.max(2, Math.ceil(lines * 0.6))
+  }
   return deletions > 30 || deletions > lines / 3
 }
 
