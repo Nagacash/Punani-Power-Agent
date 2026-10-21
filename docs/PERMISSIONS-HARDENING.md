@@ -12,7 +12,7 @@ PR #20 split **ordinary** vs **destructive** actions (`write`, `write-destructiv
 
 ## Priority 2 — Migration (`config/store.ts`)
 
-- [ ] On first load after upgrade, **persist `permissionsVersion: 2`** (optional one-time save) so migration does not re-run from disk forever
+- [x] On first load after upgrade, **persist `permissionsVersion: 2`** (one-time save) so migration does not re-run from disk forever
 - [ ] Known behavior: config whose `write`/`edit` rules **exactly match legacy** is upgraded to new **allow** ordinary write/edit — users who wanted ask-everywhere on those actions get looser defaults (destructive half still **ask**)
 - [x] Custom rules not identical to legacy rows are **kept** (covered by `test/e2e.test.ts` migration test)
 

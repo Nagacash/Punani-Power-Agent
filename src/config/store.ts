@@ -110,6 +110,7 @@ function emptyConfig(): ConfigFile {
     apiKeys: {},
     models: {},
     permissions: structuredClone(DEFAULT_PERMISSIONS),
+    permissionsVersion: PERMISSIONS_VERSION,
     headers: {},
     image: { provider: "none" },
     audio: { provider: "none" },
@@ -120,9 +121,10 @@ function emptyConfig(): ConfigFile {
 /** Keys that would change the shape of an object rather than fill it. */
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"])
 
-function coerce(raw: any): ConfigFile {
+function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean } {
   const base = emptyConfig()
-  if (!raw || typeof raw !== "object") return base
+  if (!raw || typeof raw !== "object") return { config: base, migratedPermissions: false }
+  let migratedPermissions = false
   const config: ConfigFile = {
     version: 1,
     defaultModel: typeof raw.defaultModel === "string" ? raw.defaultModel : undefined,
@@ -188,6 +190,7 @@ function coerce(raw: any): ConfigFile {
       config.permissions[action] = [...structuredClone(DEFAULT_PERMISSIONS[action]!), ...kept]
     }
     config.permissionsVersion = PERMISSIONS_VERSION
+    migratedPermissions = true
   } else {
     for (const action of Object.keys(DEFAULT_PERMISSIONS)) {
       if (!config.permissions[action]) {
@@ -239,7 +242,7 @@ function coerce(raw: any): ConfigFile {
       if (value && typeof value === "object") config.headers[id] = value
     }
   }
-  return config
+  return { config, migratedPermissions }
 }
 
 export class ConfigStore {
@@ -255,8 +258,10 @@ export class ConfigStore {
   load(): ConfigFile {
     if (this.loaded) return this.config
     let raw: any = undefined
+    let fileExisted = false
     try {
       raw = JSON.parse(fs.readFileSync(this.file, "utf8"))
+      fileExisted = true
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw new Error(
@@ -265,9 +270,11 @@ export class ConfigStore {
         )
       }
     }
-    this.config = coerce(raw)
+    const { config, migratedPermissions } = coerce(raw)
+    this.config = config
     for (const key of Object.values(this.config.apiKeys)) registerSecret(key)
     this.loaded = true
+    if (migratedPermissions && fileExisted) this.save()
     return this.config
   }
 

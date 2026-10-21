@@ -309,6 +309,8 @@ test("a config written before the rules changed is brought forward", async () =>
   )
   const config = new ConfigStore(file)
   const engine = new PermissionEngine(config.permissions())
+  const onDisk = JSON.parse(fs.readFileSync(file, "utf8"))
+  assert.equal(onDisk.permissionsVersion, 2, "migration is written back so it does not repeat every launch")
   // The old defaults are replaced.
   assert.equal(engine.decide("edit", "src/app.ts").effect, "allow")
   assert.equal(engine.decide("write", "src/app.ts").effect, "allow")
