@@ -33,6 +33,7 @@ import { listWebInstances, nextTaskLabel, registerWebInstance, unregisterWebInst
 import { spawnTaskWindow } from "./spawn-task.js"
 import { Settings } from "./settings.js"
 import { log } from "../core/logger.js"
+import { version } from "../core/version.js"
 import { redactError } from "../core/redact.js"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -432,7 +433,7 @@ export class WebServer {
       response.end(
         JSON.stringify({
           app: "punani-powerd",
-          version: "1.0.0",
+          version,
           // The token is the sign-in credential. Hand it over only to a
           // request that came from this machine, so a second local instance
           // can tell the user how to get in without exposing it to the

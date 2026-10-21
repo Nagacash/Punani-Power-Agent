@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { log } from "../core/logger.js"
+import { version } from "../core/version.js"
 import { redactError } from "../core/redact.js"
 
 /**
@@ -104,7 +105,7 @@ export class McpClient {
       {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        clientInfo: { name: "punani-powerd", version: "1.0.0" },
+        clientInfo: { name: "punani-powerd", version },
       },
       timeout,
     )
