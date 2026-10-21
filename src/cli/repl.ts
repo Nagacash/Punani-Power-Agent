@@ -1,3 +1,5 @@
+import fs from "node:fs"
+import path from "node:path"
 import readline from "node:readline/promises"
 import { stdin, stdout } from "node:process"
 import { Writable } from "node:stream"
@@ -1089,8 +1091,8 @@ async function handleCommand(
   }
 }
 
-function printHelp(): void {
-  const commands: [string, string][] = [
+/** Every command, with the line that explains it. */
+const COMMANDS: [string, string][] = [
     ["/help", "show this list"],
     ["/models [filter]", "list models, optionally filtered by a provider or substring"],
     ["/model <provider/model>", "set the default model"],
@@ -1112,12 +1114,56 @@ function printHelp(): void {
     ["/skill <words>", "find a skill, or read one with /skill load <name>"],
     ["/audio", "configure speech generation with ElevenLabs"],
     ["/exit", "quit"],
-  ]
+]
+
+/** The command names, for completion. */
+export const COMMAND_NAMES: string[] = COMMANDS.map(([name]) => name.split(" ")[0]!)
+
+function printHelp(): void {
   process.stdout.write("\n")
-  for (const [name, description] of commands) {
+  for (const [name, description] of COMMANDS) {
     process.stdout.write(`  ${style.cyan(name.padEnd(38))} ${style.gray(description)}\n`)
   }
   process.stdout.write("\n")
+}
+
+/**
+ * Complete what the user is typing.
+ *
+ * A line that starts with a slash is a command, and a line with an at sign
+ * names a file. Everything else is left alone.
+ */
+export function makeCompleter(options: PrompterOptions): (line: string) => [string[], string] {
+  const commands = options.commands ?? []
+  const projectRoot = options.projectRoot
+
+  return (line: string): [string[], string] => {
+    if (line.startsWith("/")) {
+      const matches = commands.filter((command) => command.startsWith(line))
+      return [matches, line]
+    }
+
+    const at = line.lastIndexOf("@")
+    if (at === -1 || !projectRoot) return [[], line]
+
+    const fragment = line.slice(at + 1)
+    const slash = fragment.lastIndexOf("/")
+    const directory = path.resolve(projectRoot, slash === -1 ? "." : fragment.slice(0, slash))
+    const prefix = slash === -1 ? "" : fragment.slice(0, slash + 1)
+    const name = slash === -1 ? fragment : fragment.slice(slash + 1)
+
+    let entries: fs.Dirent[] = []
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true })
+    } catch {
+      return [[], line]
+    }
+    const matches = entries
+      .filter((entry) => !entry.name.startsWith(".") && entry.name.startsWith(name))
+      .map((entry) => `@${prefix}${entry.name}${entry.isDirectory() ? "/" : ""}`)
+      .sort()
+    return [matches, line]
+  }
 }
 
 /**
@@ -1128,9 +1174,25 @@ function printHelp(): void {
  * prompter buffers them instead, so a scripted session works the same as an
  * interactive one.
  */
-export function createPrompter(): { ask: Prompter; askSecret: SecretPrompter; close: () => void; echoesInput: boolean } {
+export interface PrompterOptions {
+  /** The command names, for completion. */
+  commands?: string[]
+  /** The project root, so `@` can complete a file path. */
+  projectRoot?: string
+}
+
+export function createPrompter(
+  options: PrompterOptions = {},
+): { ask: Prompter; askSecret: SecretPrompter; close: () => void; echoesInput: boolean } {
   const echoesInput = stdin.isTTY === true
-  const rl = readline.createInterface({ input: stdin, output: stdout, terminal: echoesInput })
+  const rl = readline.createInterface({
+    input: stdin,
+    output: stdout,
+    terminal: echoesInput,
+    history: [],
+    historySize: 200,
+    completer: makeCompleter(options),
+  })
   const queue: string[] = []
   let pending: ((line: string) => void) | undefined
 
