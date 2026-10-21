@@ -18,6 +18,7 @@ let timer: NodeJS.Timeout | undefined
 let label = ""
 let width = 0
 
+/** Draw one frame of the spinner. */
 function render(frame: number): void {
   const text = `${style.gold(FRAMES[frame]!)} ${style.gray(label)}`
   process.stdout.write(`\r${text}`)
