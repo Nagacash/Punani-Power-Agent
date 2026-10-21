@@ -140,7 +140,9 @@ export class PreviewServer extends EventEmitter {
   setProject(root: string): void {
     this.projectRoot = root
     this.file = ""
-    if (this.mode === "file") this.mode = "static"
+    this.url = ""
+    // The file and the dev server belonged to the project that was left.
+    if (this.mode === "file" || this.mode === "url") this.mode = "static"
     this.restartWatcher()
     this.emit("state", this.state())
   }

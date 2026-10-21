@@ -767,8 +767,11 @@ export class WebServer {
     this.rescanSkills(target)
     this.session = this.sessions.create(target, this.model?.id, this.model?.providerID)
     // The conversation carries over, so the agent has to be told that the
-    // ground moved under it.
-    this.messages.push({ role: "user", content: projectChangedNote(target) })
+    // ground moved under it. It goes into the transcript too, so a session
+    // that is resumed later still carries the boundary.
+    const note = projectChangedNote(target)
+    this.messages.push({ role: "user", content: note })
+    this.sessions.append(this.session, { role: "user", content: note, timestamp: Date.now() })
     this.hub.send({ type: "state", ...this.snapshot() })
     this.hub.send({ type: "notice", text: `project changed to ${target}` })
     return { ok: true, project: target }
