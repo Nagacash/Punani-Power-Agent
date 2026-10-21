@@ -33,6 +33,7 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist",
+    "logo": "node scripts/make-logo.mjs",
     "demo": "bash scripts/demo.sh",
     "test": "tsx --test test/*.test.ts",
     "prepublishOnly": "npm run build && npm test && node scripts/check-package.mjs",
