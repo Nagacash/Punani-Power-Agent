@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 /**
  * Skills.
@@ -54,9 +55,29 @@ export interface SkillRoot {
   source: string
 }
 
+/**
+ * The skills that ship with the app.
+ *
+ * They are read from disk, so they work the same in a checkout and in an
+ * installed package. The app looks next to its own code first, then next
+ * to the running binary.
+ */
+export function bundledRoot(): SkillRoot | undefined {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const candidates = [
+    path.join(here, "..", "bundled", "skills"),
+    path.join(here, "..", "..", "bundled", "skills"),
+    path.join(path.dirname(process.execPath), "bundled", "skills"),
+  ]
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return { path: candidate, source: "punani" }
+  }
+  return undefined
+}
+
 /** Where skills are looked for, most specific first. */
 export function defaultRoots(projectRoot: string): SkillRoot[] {
-  return [
+  const roots: SkillRoot[] = [
     { path: path.join(projectRoot, ".punani", "skills"), source: "project" },
     { path: path.join(projectRoot, ".agents", "skills"), source: "project" },
     { path: path.join(projectRoot, ".claude", "skills"), source: "project" },
@@ -66,6 +87,11 @@ export function defaultRoots(projectRoot: string): SkillRoot[] {
     // see the ones that only exist for opencode.
     { path: path.join(os.homedir(), ".config", "opencode", "skills"), source: "opencode" },
   ]
+  // The skills that ship with the app come last, so a project can replace
+  // any of them with its own.
+  const bundled = bundledRoot()
+  if (bundled) roots.push(bundled)
+  return roots
 }
 
 /**

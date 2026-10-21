@@ -1,5 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { paths } from "../core/paths.js"
 import type { Skill } from "./loader.js"
 
@@ -36,6 +37,27 @@ export function projectRoutesFile(projectRoot: string): string {
 /** The user routes file, when there is one. */
 export function userRoutesFile(): string {
   return path.join(paths.configDir, "routes.md")
+}
+
+/**
+ * The routes file that ships with the app.
+ *
+ * It points at the skills a coding agent needs: a browser to look at a page,
+ * and a way to understand an app that was shipped as a binary. A route that
+ * names a skill the machine does not have is skipped, so a route never
+ * points at nothing.
+ */
+export function bundledRoutesFile(): string | undefined {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const candidates = [
+    path.join(here, "..", "bundled", "routes.md"),
+    path.join(here, "..", "..", "bundled", "routes.md"),
+    path.join(path.dirname(process.execPath), "bundled", "routes.md"),
+  ]
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return undefined
 }
 
 /**
@@ -90,7 +112,7 @@ export function routesFromSkills(skills: Skill[]): Route[] {
 export function buildRoutes(
   projectRoot: string,
   skills: Skill[],
-  options: { userRoutes?: boolean } = {},
+  options: { userRoutes?: boolean; bundledRoutes?: boolean } = {},
 ): Route[] {
   const byName = new Map(skills.map((skill) => [skill.name, skill]))
   const known = new Set(byName.keys())
@@ -111,6 +133,10 @@ export function buildRoutes(
 
   const files = [projectRoutesFile(projectRoot)]
   if (options.userRoutes !== false) files.push(userRoutesFile())
+  // The routes that ship with the app come last, so a project can replace
+  // any of them.
+  const bundled = bundledRoutesFile()
+  if (bundled && options.bundledRoutes !== false) files.push(bundled)
   for (const file of files) {
     for (const route of loadRoutesFile(file, known)) add(route)
   }

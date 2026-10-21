@@ -38,6 +38,18 @@ function copyAssets(dir) {
 
 copyAssets(path.join(root, "src"))
 
+// The skills that ship with the app. They are read from disk at runtime, so
+// they have to sit next to the compiled code.
+const bundled = path.join(root, "bundled")
+if (fs.existsSync(bundled)) {
+  const to = path.join(root, "dist", "bundled")
+  fs.rmSync(to, { recursive: true, force: true })
+  fs.cpSync(bundled, to, { recursive: true })
+  console.log("postbuild: copied bundled")
+} else {
+  console.warn("postbuild: no bundled directory, the app ships without its own skills")
+}
+
 // The browser UI imports Zustand's framework-agnostic store. Copy the ESM
 // build next to the compiled server so the page can import it from /vendor.
 const zustand = path.join(root, "node_modules", "zustand", "esm", "vanilla.mjs")
