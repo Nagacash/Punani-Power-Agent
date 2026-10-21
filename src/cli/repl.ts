@@ -279,13 +279,6 @@ async function runTurn(
     warnLine(`stopped after ${DEFAULT_MAX_STEPS} tool steps to stay within budget`)
   }
 
-  // Why the turn ended, so the transcript can answer that later.
-  sessions.appendTurn(session, {
-    stoppedReason: result.stoppedReason,
-    errorKind: result.error?.kind,
-    errorMessage: result.error?.message,
-  })
-
   // The messages of the turn, each with the usage of the call that made it.
   sessions.appendTurnMessages(session, result.added, result.steps)
 
@@ -360,6 +353,12 @@ function writeReasoning(text: string): void {
   }
 }
 
+/**
+ * Write one event of the turn to the terminal.
+ *
+ * The spinner stops before anything is written, so the line it drew is
+ * cleared first and the output is not written over it.
+ */
 function onEvent(event: import("../agent/agent.js").AgentEvent): void {
   switch (event.type) {
     case "assistant_text":

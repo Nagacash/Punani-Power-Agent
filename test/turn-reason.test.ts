@@ -112,6 +112,45 @@ test("a turn that runs out of steps says so in the log", async () => {
   assert.match(logText(), /turn stopped after 2 tool steps/)
 })
 
+test("a cancelled turn is an abort, not an error, and it does not fail over", async () => {
+  const controller = new AbortController()
+  const client = {
+    providerID: "mock",
+    complete: async () => {
+      controller.abort()
+      throw new LlmError({
+        kind: "unknown",
+        message: "cancelled",
+        providerID: "mock",
+        modelID: "mock",
+      })
+    },
+  } as unknown as ChatClient
+
+  let switched = 0
+  const before = logText().length
+  const result = await runAgentTurn(
+    {
+      client,
+      model,
+      tools: [],
+      projectRoot: "/tmp/project",
+      context: noopContext,
+      signal: controller.signal,
+      fallback: async () => {
+        switched++
+        return { client, model }
+      },
+    },
+    [{ role: "user", content: "hi" }],
+  )
+
+  assert.equal(result.stoppedReason, "aborted")
+  assert.equal(result.error, undefined, "a cancelled turn is not a failure")
+  assert.equal(switched, 0, "a cancelled turn does not move to another provider")
+  assert.doesNotMatch(logText().slice(before), /turn failed/)
+})
+
 test("the session log records why the turn ended", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "punani-sessions-"))
   const sessions = new SessionStore(dir)

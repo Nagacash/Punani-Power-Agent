@@ -1135,6 +1135,7 @@ export class WebServer {
     return { ok: true }
   }
 
+  /** Run a turn in the background, and report what went wrong if it fails. */
   private async runTurn(provider: any, key: string | undefined): Promise<void> {
     try {
       await this.executeTurn(provider, key)
@@ -1153,6 +1154,7 @@ export class WebServer {
     }
   }
 
+  /** Run one turn and send everything it produces to the browser. */
   private async executeTurn(provider: any, key: string | undefined): Promise<void> {
     const tools = [
       ...buildTools(this.config.imageSettings(), this.config.audioSettings(), this.mcpTools),
@@ -1297,13 +1299,6 @@ export class WebServer {
         text: `Stopped after ${DEFAULT_MAX_STEPS} tool steps to stay within budget. The task may be unfinished.`,
       })
     }
-
-    // Why the turn ended, so the transcript can answer that later.
-    this.sessions.appendTurn(this.session, {
-      stoppedReason: result.stoppedReason,
-      errorKind: result.error?.kind,
-      errorMessage: result.error?.message,
-    })
 
     // The messages of the turn, each with the usage of the call that made it.
     this.sessions.appendTurnMessages(this.session, result.added, result.steps)

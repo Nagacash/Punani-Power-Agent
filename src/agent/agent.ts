@@ -247,6 +247,7 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
    */
   async function switchModel(error: LlmError): Promise<boolean> {
     if (!options.fallback) return false
+    if (signal?.aborted) return false
     if (error.kind !== "rate_limit" && error.kind !== "quota" && error.kind !== "network") return false
     if (switches >= MAX_SWITCHES) return false
     const from = model
@@ -272,14 +273,16 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
     if (shouldCompact(messages, model, options.compactionLimit ?? 0.5)) {
       const folded = await compactConversation(client, model, messages)
       if (folded.usage) {
-        // The summary is a model call too, and it costs tokens.
+        // The summary is a model call too, and it costs tokens. A long turn
+        // can fold more than once, so the calls add up.
+        const summaryCost = estimateCost(model.cost, folded.usage.inputTokens, folded.usage.outputTokens)
         inputTokens += folded.usage.inputTokens
         outputTokens += folded.usage.outputTokens
-        cost += estimateCost(model.cost, folded.usage.inputTokens, folded.usage.outputTokens)
+        cost += summaryCost
         compaction = {
-          inputTokens: folded.usage.inputTokens,
-          outputTokens: folded.usage.outputTokens,
-          cost: estimateCost(model.cost, folded.usage.inputTokens, folded.usage.outputTokens),
+          inputTokens: (compaction?.inputTokens ?? 0) + folded.usage.inputTokens,
+          outputTokens: (compaction?.outputTokens ?? 0) + folded.usage.outputTokens,
+          cost: (compaction?.cost ?? 0) + summaryCost,
           model: model.id,
           provider: model.providerID,
         }
@@ -318,6 +321,11 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
           : undefined,
       })
     } catch (error) {
+      // A cancelled request is not a failure. The turn was stopped on
+      // purpose, so it ends as an abort and not as an error.
+      if (signal?.aborted) {
+        return { messages, added, usage: usage(), steps, compaction, stoppedReason: "aborted" }
+      }
       const llmError =
         error instanceof LlmError
           ? error
@@ -392,6 +400,10 @@ interface TurnState {
   toolsUsed: Set<string>
 }
 
+/**
+ * Run one tool the model asked for, and put the result back in the
+ * conversation so the model can answer with it.
+ */
 async function runToolCall(
   call: ToolCall,
   toolMap: Map<string, Tool>,
