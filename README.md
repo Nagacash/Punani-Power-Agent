@@ -399,15 +399,22 @@ per turn and reported after each one.
 
 ## Permissions
 
-Nothing destructive happens without you saying so.
+The work goes through. What can lose work asks.
 
 | Action | Default | What it covers |
 | --- | --- | --- |
 | `read` | allow | reading files |
 | `search` | allow | `grep` and `glob` |
-| `edit` | ask | changing part of a file |
-| `write` | ask | creating or replacing a file |
-| `bash` | ask | running a shell command |
+| `edit` | allow | changing part of a file |
+| `write` | allow | creating a file |
+| `bash` | allow | running a shell command |
+| `edit-destructive` | ask | a change that rewrites the file |
+| `write-destructive` | ask | replacing a file that is already there |
+| `bash-destructive` | ask | a command that deletes, overwrites or publishes |
+
+An agent that stops for every line is an agent the user has to watch, so the
+ordinary half of every tool goes through. The dangerous half has its own
+action, and that is the one that asks.
 
 Rules are an ordered list and the last match wins:
 

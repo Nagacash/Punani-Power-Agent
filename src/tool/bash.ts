@@ -12,14 +12,21 @@ const DESTRUCTIVE_PATTERNS: RegExp[] = [
   /\brm\s+-rf?\b/,
   /\bgit\s+reset\s+--hard\b/,
   /\bgit\s+clean\s+-[a-zA-Z]*f/,
+  /\bgit\s+checkout\s+--/,
   /\bgit\s+push\b.*--force/,
+  /\bgit\s+branch\s+-D\b/,
   /\bmkfs\b/,
   /\bdd\s+if=.*of=/,
-  /\bshutdown\b|\breboot\b/,
+  /\bshutdown\b|\breboot\b|\bhalt\b/,
   /\bchmod\s+-R\s+777\b/,
   /\bchown\s+-R\b/,
   /\bkillall\b/,
   /\bnpm\s+publish\b/,
+  /\bdocker\s+push\b/,
+  /\bsudo\b|\bsu\s+-/,
+  /\btruncate\b|\bshred\b/,
+  /\bfind\b[^|;]*-delete\b/,
+  /\bxargs\s+rm\b/,
   /\bcurl\b[^|]*\|\s*(ba)?sh/,
   /\bwget\b[^|]*\|\s*(ba)?sh/,
   />\s*\/dev\/(sd|disk|nvme)/,
@@ -57,7 +64,8 @@ export const bashTool: Tool = {
 
     const destructive = isDestructiveCommand(command)
     const outcome = await context.requestPermission({
-      action: "bash",
+      // An ordinary command goes through. One that can lose work asks.
+      action: destructive ? "bash-destructive" : "bash",
       resource: command,
       summary: `Run: ${command}`,
       detail: destructive

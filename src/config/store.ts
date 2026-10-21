@@ -37,6 +37,8 @@ export interface ConfigFile {
   reasoningEffort?: Record<string, ReasoningEffort>
   /** tool action -> ordered rules. Last match wins. */
   permissions: Record<string, PermissionRule[]>
+  /** Which version of the default rules this file was written against. */
+  permissionsVersion?: number
   /** Extra headers sent with requests, per provider id. */
   headers: Record<string, Record<string, string>>
   /** Image generation backend. */
@@ -47,13 +49,43 @@ export interface ConfigFile {
   mcp: McpServerConfig[]
 }
 
+/**
+ * The rules that ship with the app.
+ *
+ * The work itself does not need a signature. An agent that stops for every
+ * line is an agent the user has to watch, and the user cannot get anything
+ * done. So reading, writing, editing and running a command go through, and
+ * only what can lose work or reach outside the project asks.
+ *
+ * The dangerous half of a tool has its own action, so the rules for it can
+ * be separate: `bash` is an ordinary command, `bash-destructive` is one that
+ * can lose work.
+ */
 export const DEFAULT_PERMISSIONS: Record<string, PermissionRule[]> = {
+  read: [{ pattern: "*", effect: "allow" }],
+  search: [{ pattern: "*", effect: "allow" }],
+  write: [{ pattern: "*", effect: "allow" }],
+  edit: [{ pattern: "*", effect: "allow" }],
+  bash: [{ pattern: "*", effect: "allow" }],
+  // These ask. The first pair can overwrite what is there; the last can
+  // delete it.
+  "write-destructive": [{ pattern: "*", effect: "ask" }],
+  "edit-destructive": [{ pattern: "*", effect: "ask" }],
+  "bash-destructive": [{ pattern: "*", effect: "ask" }],
+}
+
+/**
+ * The rules that shipped before the agent stopped for every line.
+ *
+ * A config that still carries them gets the new ones, so the change lands
+ * on a machine that has been running the app for a while. A rule the user
+ * wrote is kept.
+ */
+const LEGACY_PERMISSIONS: Record<string, PermissionRule[]> = {
   read: [{ pattern: "*", effect: "allow" }],
   search: [{ pattern: "*", effect: "allow" }],
   write: [{ pattern: "*", effect: "ask" }],
   edit: [{ pattern: "*", effect: "ask" }],
-  // The general rule comes first: the last matching rule wins, so the
-  // specific allowances below have to be listed after it.
   bash: [
     { pattern: "*", effect: "ask" },
     { pattern: "git status*", effect: "allow" },
@@ -63,6 +95,13 @@ export const DEFAULT_PERMISSIONS: Record<string, PermissionRule[]> = {
     { pattern: "cat*", effect: "allow" },
   ],
 }
+
+/**
+ * Which version of the default rules this config was written against.
+ *
+ * Bumped when the defaults change, so a config can be brought forward.
+ */
+export const PERMISSIONS_VERSION = 2
 
 function emptyConfig(): ConfigFile {
   return {
@@ -92,6 +131,7 @@ function coerce(raw: any): ConfigFile {
     apiKeys: {},
     models: {},
     permissions: {},
+    permissionsVersion: PERMISSIONS_VERSION,
     headers: {},
     image: { provider: "none" },
     audio: { provider: "none" },
@@ -134,8 +174,26 @@ function coerce(raw: any): ConfigFile {
         }))
     }
   }
-  for (const action of Object.keys(DEFAULT_PERMISSIONS)) {
-    if (!config.permissions[action]) config.permissions[action] = structuredClone(DEFAULT_PERMISSIONS[action]!)
+  // A config written before the rules changed is brought forward: the old
+  // defaults are replaced by the new ones, and a rule the user wrote stays.
+  if (raw.permissionsVersion !== PERMISSIONS_VERSION) {
+    for (const action of Object.keys(DEFAULT_PERMISSIONS)) {
+      const stored = config.permissions[action] ?? []
+      const kept = stored.filter(
+        (rule) =>
+          !(LEGACY_PERMISSIONS[action] ?? []).some(
+            (old) => old.pattern === rule.pattern && old.effect === rule.effect,
+          ),
+      )
+      config.permissions[action] = [...structuredClone(DEFAULT_PERMISSIONS[action]!), ...kept]
+    }
+    config.permissionsVersion = PERMISSIONS_VERSION
+  } else {
+    for (const action of Object.keys(DEFAULT_PERMISSIONS)) {
+      if (!config.permissions[action]) {
+        config.permissions[action] = structuredClone(DEFAULT_PERMISSIONS[action]!)
+      }
+    }
   }
   if (raw.image && typeof raw.image === "object") {
     const image = raw.image

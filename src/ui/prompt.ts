@@ -14,7 +14,8 @@ import type { PermissionOutcome, PermissionRequest } from "../tool/types.js"
  */
 export function renderPermissionRequest(request: PermissionRequest): void {
   process.stdout.write("\n")
-  process.stdout.write(`${style.bgYellow(style.black(` ${request.action.toUpperCase()} `))} ${style.bold(request.summary)}\n`)
+  const label = permissionLabel(request.action)
+  process.stdout.write(`${style.bgYellow(style.black(` ${label} `))} ${style.bold(request.summary)}\n`)
   if (request.destructive) {
     process.stdout.write(`  ${style.red(symbol.warn)} ${style.red("This action can destroy or overwrite data.")}\n`)
   }
@@ -31,6 +32,25 @@ export function renderPermissionRequest(request: PermissionRequest): void {
     `  ${style.green("y")}${style.gray(" once")}  ${style.green("a")}${style.gray(" always")}  ` +
       `${style.red("n")}${style.gray(" reject")}  ${style.gray("(optionally n <reason>)")}\n`,
   )
+}
+
+/**
+ * The name of the action, for the prompt.
+ *
+ * The dangerous half of a tool has its own action, so the label says what
+ * is about to happen rather than which rule fired.
+ */
+export function permissionLabel(action: string): string {
+  switch (action) {
+    case "write-destructive":
+      return "WRITE (REPLACES)"
+    case "edit-destructive":
+      return "EDIT (REWRITES)"
+    case "bash-destructive":
+      return "BASH (DESTRUCTIVE)"
+    default:
+      return action.toUpperCase()
+  }
 }
 
 /** Turn the user's typed reply into a decision. */

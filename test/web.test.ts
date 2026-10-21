@@ -71,6 +71,7 @@ before(async () => {
             ],
           }
         } else if (step === 2) {
+          // A command that can lose work. That one asks.
           message = {
             role: "assistant",
             content: "",
@@ -78,7 +79,7 @@ before(async () => {
               {
                 id: "call_bash",
                 type: "function",
-                function: { name: "bash", arguments: JSON.stringify({ command: "echo hello" }) },
+                function: { name: "bash", arguments: JSON.stringify({ command: "rm -rf ./build" }) },
               },
             ],
           }
@@ -282,13 +283,13 @@ test("the browser interface runs a turn and asks for permission", async () => {
           const result = await post(base, token, "permission", { id, reply: "once" })
           assert.deepEqual(result, { ok: true })
           approved.push(action)
-          if (approved.length >= 2) return
+          if (approved.length >= 1) return
           continue
         }
-        if (approved.length >= 2) return
+        if (approved.length >= 1) return
         await new Promise((resolve) => setTimeout(resolve, 25))
       }
-      if (approved.length < 2) throw new Error("expected two permission requests, saw " + approved.length)
+      if (approved.length < 1) throw new Error("expected a permission request, saw " + approved.length)
     })()
 
     const started = await post(base, token, "message", { text: "change the first line" })
@@ -297,12 +298,13 @@ test("the browser interface runs a turn and asks for permission", async () => {
     const events = await stream
     await approval
 
-    // Both the edit and the shell command must have been asked about.
-    assert.deepEqual(approved, ["edit", "bash"])
+    // The ordinary edit went through without asking. The command that can
+    // lose work asked.
+    assert.deepEqual(approved, ["bash-destructive"])
 
     const types = events.map((event) => event.type)
     assert.ok(types.includes("diff"), "a diff should be previewed before the edit")
-    assert.ok(types.includes("permission"), "the edit should ask for approval")
+    assert.ok(types.includes("permission"), "the destructive command should ask for approval")
     assert.ok(types.includes("tool_end"), "the tool should report a result")
     assert.ok(types.includes("assistant"), "the model should answer")
     assert.ok(types.includes("done"), "the turn should finish")
@@ -313,7 +315,7 @@ test("the browser interface runs a turn and asks for permission", async () => {
     assert.equal(diff.deletions, 1)
 
     const permission = events.find((event) => event.type === "permission")
-    assert.equal(permission.action, "edit")
+    assert.equal(permission.action, "bash-destructive")
     assert.equal(permission.destructive, true)
     assert.ok(permission.id)
 

@@ -27,8 +27,10 @@ export const writeTool: Tool = {
     // Show the user the exact change before anything is written.
     context.previewDiff(target.relative, previous, content)
 
+    // A new file goes through. Replacing a file that is already there can
+    // lose what was in it, so that asks.
     const outcome = await context.requestPermission({
-      action: "write",
+      action: existed ? "write-destructive" : "write",
       resource: target.relative,
       summary: existed ? `Replace ${target.relative}` : `Create ${target.relative}`,
       detail: existed
@@ -116,12 +118,15 @@ export const editTool: Tool = {
     // Show the user the exact change before anything is written.
     context.previewDiff(target.relative, content, updated)
 
+    // A surgical change goes through. A change that takes a third of the
+    // file with it is a rewrite, not an edit, and that asks.
+    const destructive = isRewrite(content, updated)
     const outcome = await context.requestPermission({
-      action: "edit",
+      action: destructive ? "edit-destructive" : "edit",
       resource: target.relative,
       summary: `Edit ${target.relative}`,
       detail: describeEdit(target.relative, content, updated, occurrences),
-      destructive: true,
+      destructive,
       alwaysPatterns: [target.relative],
     })
     if (!outcome.granted) {
@@ -149,6 +154,22 @@ export const editTool: Tool = {
       meta: { path: target.relative, additions: stats.additions, deletions: stats.deletions },
     }
   },
+}
+
+/**
+ * True when a change takes so much of the file with it that it is a
+ * rewrite rather than an edit.
+ *
+ * A rewrite can lose work the user cared about, so it asks. A line here and
+ * a line there does not.
+ */
+export function isRewrite(before: string, after: string): boolean {
+  const { deletions } = diffStats(before, after)
+  if (deletions === 0) return false
+  const lines = before.split("\n").length
+  // A small file is not a rewrite: a line here and there is the whole work.
+  if (lines < 10) return false
+  return deletions > 30 || deletions > lines / 3
 }
 
 function countOccurrences(haystack: string, needle: string): number {

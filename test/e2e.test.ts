@@ -273,14 +273,49 @@ test("a denied permission stops the tool from running", async () => {
   assert.match(rejected.output, /not now/)
 })
 
-test("the default ruleset allows reads and asks before edits", async () => {
+test("the default ruleset lets the work through and asks for the damage", async () => {
   const config = new ConfigStore(configFile)
   const engine = new PermissionEngine(config.permissions())
+  // The work itself does not need a signature.
   assert.equal(engine.decide("read", "src/app.ts").effect, "allow")
-  assert.equal(engine.decide("edit", "src/app.ts").effect, "ask")
-  assert.equal(engine.decide("write", "src/app.ts").effect, "ask")
+  assert.equal(engine.decide("search", "src").effect, "allow")
+  assert.equal(engine.decide("edit", "src/app.ts").effect, "allow")
+  assert.equal(engine.decide("write", "src/new.ts").effect, "allow")
+  assert.equal(engine.decide("bash", "npm test").effect, "allow")
   assert.equal(engine.decide("bash", "git status").effect, "allow")
-  assert.equal(engine.decide("bash", "rm -rf build").effect, "ask")
+  // What can lose work asks.
+  assert.equal(engine.decide("write-destructive", "src/app.ts").effect, "ask")
+  assert.equal(engine.decide("edit-destructive", "src/app.ts").effect, "ask")
+  assert.equal(engine.decide("bash-destructive", "rm -rf build").effect, "ask")
+})
+
+test("a config written before the rules changed is brought forward", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "punani-perm-"))
+  const file = path.join(dir, "config.json")
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      permissions: {
+        read: [{ pattern: "*", effect: "allow" }],
+        write: [{ pattern: "*", effect: "ask" }],
+        edit: [{ pattern: "*", effect: "ask" }],
+        bash: [
+          { pattern: "*", effect: "ask" },
+          { pattern: "npm test*", effect: "allow" },
+        ],
+      },
+    }),
+  )
+  const config = new ConfigStore(file)
+  const engine = new PermissionEngine(config.permissions())
+  // The old defaults are replaced.
+  assert.equal(engine.decide("edit", "src/app.ts").effect, "allow")
+  assert.equal(engine.decide("write", "src/app.ts").effect, "allow")
+  // A rule the user wrote is kept.
+  assert.equal(engine.decide("bash", "npm test").effect, "allow")
+  // And the new actions are in place.
+  assert.equal(engine.decide("bash-destructive", "rm -rf build").effect, "ask")
 })
 
 test("an always-allow reply is remembered for the session", async () => {
