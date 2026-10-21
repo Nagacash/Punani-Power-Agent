@@ -775,6 +775,12 @@ $ punani --resume ses_mvgkk6lnikjk51
 | `/permissions <action> <pattern> <effect>` | set `allow`, `ask` or `deny` |
 | `/history` | list previous sessions |
 | `/session` | show the current session |
+| `/new` | start a new session |
+| `/rename <title>` | name the current session |
+| `/fork` | copy the session and carry on in the copy |
+| `/move <dir>` | move to another project directory |
+| `/init` | write the project files the agent reads on every turn |
+| `/review [commit\|branch\|pr]` | review the changes, the uncommitted ones by default |
 | `/clear` | clear the conversation |
 | `/context` | show the system prompt |
 | `/config` | show config paths and file permissions |

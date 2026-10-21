@@ -548,7 +548,15 @@ async function main(): Promise<number> {
       sessions,
       projectRoot,
       ask,
-      state: { model, providerName },
+      // The session, the conversation and the tool set are filled in when
+      // the app starts, and the commands can replace them afterwards.
+      state: {
+        model,
+        providerName,
+        session: resume?.meta ?? sessions.create(projectRoot, model.id, model.providerID),
+        messages: resume?.messages ?? [],
+        tools: [],
+      },
       resume,
       askSecret,
       echoesInput,
