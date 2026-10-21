@@ -615,11 +615,16 @@ npx skills add cathrynlavery/diagram-design # diagrams, charts and schemas
 npx skills add D4Vinci/Scrapling           # scraping a site that says no
 npx skills add coreyhaines31/marketingskills # SEO, copy, content and campaigns
 npx skills add mattpocock/skills           # the engineering workflows
+npx skills add heygen-com/hyperframes      # video: promo clips, explainers, captions
 ```
 
 They land in `~/.agents/skills`, which Punani already reads, so the agent
 finds them on the next run. A route for a library that is not installed is
 skipped, so nothing breaks and nothing points at nothing.
+
+HyperFrames renders video from HTML: a promo clip for a site, an explainer
+from a brief, captions on footage you have, a deck as a video. It needs
+Node.js 22 and FFmpeg, and it renders on your machine.
 
 ```
 /skills                what groups exist
