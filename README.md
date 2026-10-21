@@ -587,8 +587,21 @@ The agent reads a library of instruction folders, the same shape the
 
 Your skills on this machine are already in that format, in `~/.agents/skills`,
 `~/.claude/skills` and `~/.config/opencode/skills`, plus any you drop in
-`<project>/.punani/skills`. A skill behind a symlink counts too. Nothing is bundled with the app and nothing is
-hard-coded — the library stays where it is and keeps updating.
+`<project>/.punani/skills`. A skill behind a symlink counts too. The library
+stays where it is and keeps updating.
+
+The app ships two skills of its own, and they come last, so a project can
+replace either of them with its own:
+
+| Skill | What it is for |
+| --- | --- |
+| `browser` | driving a real browser: open a page, click through it, screenshot it, test the running app |
+| `reverse-engineer-anything` | [REA](https://github.com/morluto/rea) (MIT), for understanding an app that was shipped as a binary |
+
+The app also ships a routes file, so a situation has a skill even when the
+skill lives somewhere else. It points at `browser-use` when the machine has
+that skill, and a route that names a skill the machine does not have is
+skipped, so a route never points at nothing.
 
 ```
 /skills                what groups exist
@@ -708,6 +721,7 @@ tools the model can call.
 /mcp                          list the configured servers
 /mcp add filesystem /Users/you/code
 /mcp add browser              the browser-harness MCP server
+/mcp add rea                  the REA reverse-engineering server
 /mcp remove filesystem
 ```
 
@@ -718,7 +732,10 @@ Well-known servers are one click. `browser` is
 MIT, four dependencies, no LLM key, no browser download: it drives the Chrome
 you are already signed into. `video` is
 [SylphxAI/anymd](https://github.com/SylphxAI/anymd) — MIT, a single native
-binary, local transcription, no API key.
+binary, local transcription, no API key. `rea` is
+[morluto/rea](https://github.com/morluto/rea) — MIT, and it is what the
+`reverse-engineer-anything` skill needs: the tools that decompile a binary,
+unpack an app and observe it at runtime.
 
 MCP tools are named `<server>_<tool>` and are gated by their own permission
 action, so a tool from a third-party server still has to be approved.

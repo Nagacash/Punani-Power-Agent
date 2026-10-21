@@ -12,6 +12,7 @@ RUN npm ci --no-audit --no-fund
 COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
+COPY bundled ./bundled
 RUN npm run build
 
 # Drop the dev dependencies from the runtime image.

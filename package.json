@@ -17,6 +17,7 @@
     "dist/**/*.html",
     "dist/**/*.png",
     "dist/**/*.svg",
+    "dist/bundled/**",
     "!dist/pkg/**",
     "!dist/release/**",
     "!dist/punani",

@@ -228,6 +228,11 @@ export const KNOWN_MCP_SERVERS: Record<
     args: ["-y", "@modelcontextprotocol/server-puppeteer"],
     note: "drive a headless browser",
   },
+  rea: {
+    command: "npx",
+    args: ["-y", "rea-agents@latest", "mcp"],
+    note: "reverse engineer apps, binaries and packages, and show the evidence",
+  },
   browser: {
     command: "uvx",
     args: ["browser-harness-mcp"],
