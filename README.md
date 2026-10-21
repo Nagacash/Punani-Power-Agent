@@ -788,7 +788,18 @@ In the browser, the same session is stored the same way, so `punani --resume
 
 ## When a model fails
 
-Failures are classified, explained, and paired with alternatives:
+A throttle is handled on the spot. The turn carries on with another model,
+free first, and the switch is printed:
+
+```
+! Rate limited on openrouter/minimax/minimax-m3.1-flash:free. Carrying on with groq/llama-3.3-70b-versatile.
+```
+
+The FreeLLMAPI router comes first when it is set up, because it knows which
+upstream still has quota. A paid model is only used when its provider already
+holds a key, so a switch never costs money you did not agree to spend.
+
+Everything else is classified, explained, and paired with alternatives:
 
 ```
 ✖ Rate limited: Too Many Requests

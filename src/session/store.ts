@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { paths } from "../core/paths.js"
-import type { ChatMessage } from "../llm/client.js"
+import { messageText, type ChatMessage } from "../llm/client.js"
 
 /**
  * Session storage.
@@ -35,6 +35,11 @@ export interface SessionMessage {
   tokensIn?: number
   tokensOut?: number
   cost?: number
+  /** Why the turn ended. Only on the turn record. */
+  stoppedReason?: string
+  /** The provider error that ended the turn, when it ended badly. */
+  errorKind?: string
+  errorMessage?: string
   timestamp: number
 }
 
@@ -102,6 +107,91 @@ export class SessionStore {
       meta.title = message.content.trim().split("\n")[0]!.slice(0, 80)
     }
     this.writeIndex()
+  }
+
+  /**
+   * Write the messages a turn produced.
+   *
+   * Each assistant message carries the usage of the call that produced it,
+   * so the transcript says what each step cost instead of the turn total on
+   * every line.
+   */
+  appendTurnMessages(
+    meta: SessionMeta,
+    added: ChatMessage[],
+    steps: {
+      inputTokens: number
+      outputTokens: number
+      cost: number
+      model: string
+      provider: string
+    }[],
+  ): void {
+    let step = 0
+    for (const message of added) {
+      if (message.role === "assistant") {
+        // The step is counted even when the message is not written: the call
+        // happened, and the tokens were spent.
+        const usage = steps[step]
+        step++
+        const text = messageText(message)
+        const calls = message.toolCalls ?? []
+        if (!text.trim() && calls.length === 0) continue
+        this.append(meta, {
+          role: "assistant",
+          content: text,
+          toolCalls: calls.length
+            ? calls.map((call) => ({ id: call.id, name: call.name, arguments: call.arguments }))
+            : undefined,
+          model: usage?.model,
+          provider: usage?.provider,
+          tokensIn: usage?.inputTokens ?? 0,
+          tokensOut: usage?.outputTokens ?? 0,
+          cost: usage?.cost ?? 0,
+          timestamp: Date.now(),
+        })
+        continue
+      }
+      if (message.role === "tool") {
+        this.append(meta, {
+          role: "tool",
+          content: messageText(message),
+          tool: message.name,
+          toolCallId: message.toolCallId,
+          timestamp: Date.now(),
+        })
+      }
+    }
+  }
+
+  /**
+   * Record how a turn ended.
+   *
+   * The transcript alone does not say why a run stopped: the answer and the
+   * tools look the same whether the model finished, hit the step limit, was
+   * cancelled, or died on a provider error. This is the only record of that,
+   * so it is written whatever the reason.
+   */
+  appendTurn(
+    meta: SessionMeta,
+    turn: {
+      stoppedReason: string
+      errorKind?: string
+      errorMessage?: string
+      usage?: { inputTokens: number; outputTokens: number; cost: number }
+    },
+  ): void {
+    this.append(meta, {
+      role: "system",
+      content: "",
+      stoppedReason: turn.stoppedReason,
+      errorKind: turn.errorKind,
+      errorMessage: turn.errorMessage,
+      tokensIn: turn.usage?.inputTokens ?? 0,
+      tokensOut: turn.usage?.outputTokens ?? 0,
+      cost: turn.usage?.cost ?? 0,
+      timestamp: Date.now(),
+    })
   }
 
   /** Replace the on-disk transcript (for edit / revert in the browser). */

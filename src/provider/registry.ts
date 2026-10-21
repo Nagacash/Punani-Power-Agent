@@ -146,7 +146,8 @@ export class ProviderRegistry {
 
   /** Router aliases that need upstream keys in FreeLLMAPI — not a first-run default. */
   private static isRouterAlias(model: ModelInfo): boolean {
-    return model.providerID === "freellmapi" && (model.id === "auto" || model.id === "fusion")
+    if (model.providerID !== "freellmapi") return false
+    return model.id === "auto" || model.id === "fusion" || model.id.startsWith("auto:")
   }
 
   /** The model to start with: the configured default, else the first usable one. */
@@ -210,6 +211,56 @@ export class ProviderRegistry {
       .filter((model) => model.id !== failed.id || model.providerID !== failed.providerID)
       .sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))
       .slice(0, 5)
+  }
+
+  /**
+   * Models to move to when the current one is throttled.
+   *
+   * Free models come first, then a paid model whose provider already holds a
+   * key, so a switch never costs money the user did not agree to spend.
+   * Another provider comes before the same one: a rate limit is usually about
+   * the provider, not about the model. A provider that cannot be reached is
+   * not a fallback at all, so it is left out.
+   */
+  async fallbackModels(failed: ModelInfo): Promise<ModelInfo[]> {
+    const usable = new Set<string>()
+    for (const provider of this.providers()) {
+      if (await this.isUsable(provider)) usable.add(provider.id)
+    }
+
+    const candidates: ModelInfo[] = []
+    for (const provider of this.providers()) {
+      if (!usable.has(provider.id)) continue
+      let models: ModelInfo[]
+      try {
+        models = (await this.catalog(provider)).models.map((model) => this.applyOverride(model))
+      } catch {
+        // The provider is down. Its seeded models are not an option.
+        continue
+      }
+      candidates.push(...models)
+    }
+
+    const open = candidates.filter(
+      (model) =>
+        model.toolSupport &&
+        model.status === "active" &&
+        usable.has(model.providerID) &&
+        !(model.providerID === failed.providerID && model.id === failed.id),
+    )
+
+    const rank = (model: ModelInfo): number => {
+      let score = 0
+      // The router knows which upstream still has quota.
+      if (ProviderRegistry.isRouterAlias(model)) score -= 12
+      // A throttled provider is likely still throttled.
+      if (model.providerID === failed.providerID) score += 20
+      // Free before paid.
+      if (model.cost.input !== 0 || model.cost.output !== 0) score += 8
+      return score
+    }
+
+    return open.sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))
   }
 
   /** Status of every provider, for the `/providers` view. */

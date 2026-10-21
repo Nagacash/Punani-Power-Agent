@@ -66,6 +66,8 @@ export interface CompactionResult {
   folded: number
   /** The summary, for the user to see. */
   summary: string
+  /** What the summary call cost, when it happened. */
+  usage?: { inputTokens: number; outputTokens: number }
 }
 
 /**
@@ -106,6 +108,7 @@ export async function compactConversation(
     .join("\n\n")
 
   let summary = ""
+  let usage: { inputTokens: number; outputTokens: number } | undefined
   try {
     const completion = await client.complete({
       model: model.id,
@@ -122,6 +125,10 @@ export async function compactConversation(
       ],
     })
     summary = completion.content.trim()
+    usage = {
+      inputTokens: completion.usage.inputTokens,
+      outputTokens: completion.usage.outputTokens,
+    }
   } catch {
     // A failed summary is not worth losing the conversation over. The old
     // messages are kept instead.
@@ -131,7 +138,6 @@ export async function compactConversation(
   if (!summary) {
     return { messages, folded: 0, summary: "" }
   }
-
   const folded: ChatMessage = {
     role: "user",
     content:
@@ -140,5 +146,5 @@ export async function compactConversation(
       summary,
   }
 
-  return { messages: [folded, ...recent], folded: older.length, summary }
+  return { messages: [folded, ...recent], folded: older.length, summary, usage }
 }

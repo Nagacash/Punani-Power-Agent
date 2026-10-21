@@ -12,7 +12,7 @@ import { buildTools } from "../tool/registry.js"
 import { createSkillTools } from "../tool/skill.js"
 import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex } from "../skills/loader.js"
 import { McpRegistry } from "../mcp/registry.js"
-import { buildSystemPrompt, describeProject, runAgentTurn } from "../agent/agent.js"
+import { buildSystemPrompt, describeProject, runAgentTurn, DEFAULT_MAX_STEPS } from "../agent/agent.js"
 import { modelKey } from "../provider/types.js"
 import { loadAlwaysOn, renderAlwaysOn } from "../agent/prompt.js"
 import { buildRoutes, renderRoutes } from "../skills/routing.js"
@@ -20,6 +20,7 @@ import { stopDevServers } from "../tool/dev.js"
 import { loadProjectInstructions } from "../agent/instructions.js"
 import { PermissionEngine, resolvePermission } from "../agent/permission.js"
 import { createClient } from "../llm/factory.js"
+import { createFailover } from "../provider/failover.js"
 import { diffLines } from "../tool/diff.js"
 import { diskMutate } from "../tool/fsutil.js"
 import { messageText, type ChatMessage } from "../llm/client.js"
@@ -1162,6 +1163,24 @@ export class WebServer {
     const effectiveKey = key ?? this.requestKeys[provider.id]
     const client = createClient(provider, effectiveKey, this.config.headers(provider.id))
 
+    // A provider that throttles hands the turn to another model. The session
+    // follows it, so the next turn starts on the model that works.
+    const failover = createFailover({
+      registry: this.registry,
+      config: this.config,
+      keyFor: (providerID) => {
+        const browserKey = this.requestKeys[providerID]
+        if (browserKey) return browserKey
+        const entry = this.registry.provider(providerID)
+        return entry ? this.registry.keyFor(entry).key : undefined
+      },
+      onSwitch: (next) => {
+        this.model = next
+        this.session.model = next.id
+        this.session.provider = next.providerID
+      },
+    })
+
     const context: ToolContext = {
       allowedReadDirs: defaultRoots(this.projectRoot).map((root) => root.path),
       projectRoot: this.projectRoot,
@@ -1230,6 +1249,7 @@ export class WebServer {
         projectRoot: this.projectRoot,
         context,
         signal: this.abort?.signal,
+        fallback: failover,
         onEvent: (event) => {
           if (event.type === "assistant_text" && event.text) {
             this.hub.send({ type: "assistant", text: event.text, delta: event.partial === true })
@@ -1252,6 +1272,9 @@ export class WebServer {
               meta: event.result.meta,
             })
           }
+          if (event.type === "notice" && event.text) {
+            this.hub.send({ type: "notice", text: event.text })
+          }
         },
       },
       [{ role: "system", content: system }, ...this.messages],
@@ -1266,34 +1289,32 @@ export class WebServer {
         hint: result.error.hint,
         ...(await this.suggestions()),
       })
+    } else if (result.stoppedReason === "max_steps") {
+      // A turn that hits the step limit looks like a finished one unless
+      // something says so.
+      this.hub.send({
+        type: "notice",
+        text: `Stopped after ${DEFAULT_MAX_STEPS} tool steps to stay within budget. The task may be unfinished.`,
+      })
     }
 
-    for (const message of result.added) {
-      if (message.role === "system") continue
-      if (message.role === "assistant") {
-        const calls = message.toolCalls ?? []
-        if (!messageText(message).trim() && calls.length === 0) continue
-        this.sessions.append(this.session, {
-          role: "assistant",
-          content: messageText(message),
-          toolCalls: calls.map((call) => ({ id: call.id, name: call.name, arguments: call.arguments })),
-          model: this.model!.id,
-          provider: this.model!.providerID,
-          tokensIn: result.usage.inputTokens,
-          tokensOut: result.usage.outputTokens,
-          cost: result.usage.cost,
-          timestamp: Date.now(),
-        })
-      } else if (message.role === "tool") {
-        this.sessions.append(this.session, {
-          role: "tool",
-          content: messageText(message),
-          tool: message.name,
-          toolCallId: message.toolCallId,
-          timestamp: Date.now(),
-        })
-      }
-    }
+    // Why the turn ended, so the transcript can answer that later.
+    this.sessions.appendTurn(this.session, {
+      stoppedReason: result.stoppedReason,
+      errorKind: result.error?.kind,
+      errorMessage: result.error?.message,
+    })
+
+    // The messages of the turn, each with the usage of the call that made it.
+    this.sessions.appendTurnMessages(this.session, result.added, result.steps)
+
+    // Why the turn ended, and what the whole turn cost.
+    this.sessions.appendTurn(this.session, {
+      stoppedReason: result.stoppedReason,
+      errorKind: result.error?.kind,
+      errorMessage: result.error?.message,
+      usage: result.usage,
+    })
 
     this.messages = result.messages.filter((message) => message.role !== "system")
 
