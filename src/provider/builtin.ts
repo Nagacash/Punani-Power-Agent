@@ -84,6 +84,23 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
   },
   {
     config: {
+      id: "anthropic",
+      kind: "anthropic",
+      name: "Anthropic",
+      baseURL: "https://api.anthropic.com/v1",
+      env: "ANTHROPIC_API_KEY",
+      defaultContextWindow: 200_000,
+    },
+    seedModels: [
+      "claude-opus-4-5",
+      "claude-sonnet-4-5",
+      "claude-haiku-4-5",
+      "claude-3-7-sonnet-latest",
+    ],
+    requiresKey: true,
+  },
+  {
+    config: {
       id: "nvidia",
       kind: "openai-compatible",
       name: "NVIDIA NIM",
