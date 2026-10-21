@@ -248,7 +248,7 @@ async function runTurn(
   }
 
   // Persist the assistant side of the conversation, minus the system prompt.
-  for (const message of result.messages) {
+  for (const message of result.added) {
     if (message.role === "system") continue
     if (message.role === "assistant") {
       const text = messageText(message)

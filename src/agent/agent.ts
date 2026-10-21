@@ -5,6 +5,7 @@ import { LlmError } from "../llm/errors.js"
 import type { ModelInfo } from "../provider/types.js"
 import { estimateCost } from "../provider/types.js"
 import { toDefinition, type Tool, type ToolContext, type ToolResult } from "../tool/types.js"
+import { compactConversation, shouldCompact } from "./compact.js"
 import type { Skill } from "../skills/loader.js"
 
 /** The system prompt. It states the operating rules the agent must follow. */
@@ -140,13 +141,21 @@ export interface AgentOptions {
   skills?: Skill[]
   /** How hard a reasoning model is asked to think. */
   reasoningEffort?: "low" | "medium" | "high"
+  /** The share of the context window a conversation may fill. Lower folds it sooner. */
+  compactionLimit?: number
   maxSteps?: number
   signal?: AbortSignal
   onEvent?: (event: AgentEvent) => void
 }
 
 export interface AgentTurnResult {
+  /** The conversation as the model sees it, with the system prompt first. */
   messages: ChatMessage[]
+  /**
+   * The messages this turn added. The history before the turn is not in
+   * here, so a session log does not record the same answer twice.
+   */
+  added: ChatMessage[]
   usage: { inputTokens: number; outputTokens: number; cost: number }
   stoppedReason: "finished" | "max_steps" | "aborted" | "error"
   error?: LlmError
@@ -169,10 +178,26 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
   let outputTokens = 0
   // What the turn actually did, so a skill's receipts can be checked.
   const turn: TurnState = { loadedSkills: [], toolsUsed: new Set() }
+  // The messages this turn produced, for the session log.
+  const added: ChatMessage[] = []
 
   for (let step = 0; step < maxSteps; step++) {
     if (signal?.aborted) {
-      return { messages, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "aborted" }
+      return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "aborted" }
+    }
+
+    // A conversation that has grown past the limit is folded into a summary,
+    // so the next turn still fits and still costs what it should.
+    if (shouldCompact(messages, model, options.compactionLimit ?? 0.5)) {
+      const folded = await compactConversation(client, model, messages)
+      if (folded.folded > 0) {
+        messages.length = 0
+        messages.push(...folded.messages)
+        options.onEvent?.({
+          type: "notice",
+          text: `Folded ${folded.folded} earlier message(s) into a summary, to keep the conversation within the context window.`,
+        })
+      }
     }
 
     let completion
@@ -209,7 +234,7 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
               modelID: model.id,
             })
       options.onEvent?.({ type: "error", error: llmError })
-      return { messages, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "error", error: llmError }
+      return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "error", error: llmError }
     }
 
     inputTokens += completion.usage.inputTokens
@@ -221,6 +246,7 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
       toolCalls: completion.toolCalls.length ? completion.toolCalls : undefined,
     }
     messages.push(assistantMessage)
+    added.push(assistantMessage)
     if (completion.reasoning && !streamedReasoning) {
       options.onEvent?.({ type: "reasoning", text: completion.reasoning })
     }
@@ -231,19 +257,19 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
     if (completion.toolCalls.length === 0) {
       options.onEvent?.({ type: "usage", usage: usageOf(inputTokens, outputTokens, model) })
       checkReceipts(options, turn.loadedSkills, turn.toolsUsed)
-      return { messages, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "finished" }
+      return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "finished" }
     }
 
     for (const call of completion.toolCalls) {
-      await runToolCall(call, toolMap, context, messages, options, turn)
+      await runToolCall(call, toolMap, context, messages, options, turn, added)
       if (signal?.aborted) {
-        return { messages, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "aborted" }
+        return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "aborted" }
       }
     }
   }
 
   options.onEvent?.({ type: "usage", usage: usageOf(inputTokens, outputTokens, model) })
-  return { messages, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "max_steps" }
+  return { messages, added, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "max_steps" }
 }
 
 /** What the turn did, so a skill's receipts can be checked at the end. */
@@ -261,6 +287,7 @@ async function runToolCall(
   messages: ChatMessage[],
   options: AgentOptions,
   turn: TurnState,
+  added: ChatMessage[],
 ): Promise<void> {
   const model = options.model
   const emit = options.onEvent
@@ -274,7 +301,9 @@ async function runToolCall(
     }
     emit?.({ type: "tool_start", tool: call.name, toolCallId: call.id })
     emit?.({ type: "tool_end", tool: call.name, toolCallId: call.id, result })
-    messages.push({ role: "tool", content: result.output, toolCallId: call.id, name: call.name })
+    const failed: ChatMessage = { role: "tool", content: result.output, toolCallId: call.id, name: call.name }
+    messages.push(failed)
+    added.push(failed)
     return
   }
 
@@ -310,7 +339,7 @@ async function runToolCall(
   emit?.({ type: "tool_end", tool: call.name, toolCallId: call.id, result })
 
   if (result.image && model?.vision) {
-    messages.push({
+    const withImage: ChatMessage = {
       role: "tool",
       content: [
         { type: "text", text: result.output },
@@ -318,11 +347,15 @@ async function runToolCall(
       ],
       toolCallId: call.id,
       name: call.name,
-    })
+    }
+    messages.push(withImage)
+    added.push(withImage)
     return
   }
 
-  messages.push({ role: "tool", content: result.output, toolCallId: call.id, name: call.name })
+  const plain: ChatMessage = { role: "tool", content: result.output, toolCallId: call.id, name: call.name }
+  messages.push(plain)
+  added.push(plain)
 }
 
 /**
