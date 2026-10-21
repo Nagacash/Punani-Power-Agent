@@ -66,10 +66,11 @@ function character(taken, x, y) {
   const left = has(-1, 0)
   const up = has(0, -1)
   const down = has(0, 1)
+  // └ joins up and right. ┘ joins up and left.
   if (right && down) return "┌"
   if (left && down) return "┐"
-  if (left && up) return "└"
-  if (right && up) return "┘"
+  if (right && up) return "└"
+  if (left && up) return "┘"
   if (right || left) return "─"
   return "│"
 }
