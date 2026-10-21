@@ -16,7 +16,7 @@ import type { ToolContext } from "../src/tool/types.ts"
 
 function project(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "punani-astgrep-"))
-  fs.writeFileSync(path.join(root, "app.ts"), "export function add(a: number, b: number) {\n  return a + b\n}\n")
+  fs.writeFileSync(path.join(root, "app.ts"), "export const add = (a: number) => {\n  console.log(a)\n  return a\n}\n")
   return root
 }
 
@@ -48,7 +48,7 @@ test("a pattern is required", async () => {
 
 test("the search says what it found, or that it could not run", async () => {
   const root = project()
-  const result = await astGrepTool.run({ pattern: "function $NAME($$$)" }, context(root))
+  const result = await astGrepTool.run({ pattern: "console.log($A)" }, context(root))
   if (isAstGrepAvailable()) {
     assert.doesNotMatch(result.output, /not installed/)
     assert.match(result.output, /app\.ts/)

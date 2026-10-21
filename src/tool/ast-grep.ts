@@ -130,6 +130,37 @@ function candidateFiles(context: ToolContext, scope: string | undefined, languag
   return files.slice(0, 2_000)
 }
 
+/**
+ * Read the matches out of ast-grep's output.
+ *
+ * The compact JSON is one array of matches. Older builds printed one match
+ * per line, so both shapes are read.
+ */
+function parseMatches(body: string): any[] {
+  const text = body.trim()
+  if (!text) return []
+  try {
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed)) return parsed
+    if (parsed && typeof parsed === "object") return [parsed]
+    return []
+  } catch {
+    /* not one JSON document: try it line by line */
+  }
+  const out: any[] = []
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue
+    try {
+      const parsed = JSON.parse(line)
+      if (Array.isArray(parsed)) out.push(...parsed)
+      else if (parsed && typeof parsed === "object") out.push(parsed)
+    } catch {
+      /* not a match line */
+    }
+  }
+  return out
+}
+
 async function runAstGrep(
   binary: string,
   pattern: string,
@@ -155,20 +186,16 @@ async function runAstGrep(
     })
     child.on("error", () => resolve([]))
     child.on("close", () => {
-      const lines = Buffer.concat(chunks).toString("utf8").split("\n").filter((line) => line.trim())
+      const body = Buffer.concat(chunks).toString("utf8")
       const out: string[] = []
-      for (const line of lines) {
+      for (const match of parseMatches(body)) {
         if (out.length >= limit) break
-        try {
-          const match = JSON.parse(line)
-          const file = match.file ?? ""
-          const relative = path.relative(context.projectRoot, path.resolve(context.projectRoot, file)).split(path.sep).join("/")
-          const text = (match.text ?? "").split("\n")[0]!.trim().slice(0, 160)
-          const line0 = match.line ?? 0
-          out.push(`${relative}:${line0}: ${text}`)
-        } catch {
-          /* not a match line */
-        }
+        const file = match.file ?? ""
+        const relative = path.relative(context.projectRoot, path.resolve(context.projectRoot, file)).split(path.sep).join("/")
+        const text = (match.text ?? "").split("\n")[0]!.trim().slice(0, 160)
+        // The line in the output is the one a person would look at.
+        const line = match.range?.start?.line ?? match.line ?? 0
+        out.push(`${relative}:${line + 1}: ${text}`)
       }
       resolve(out)
     })
