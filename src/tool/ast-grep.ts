@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { spawn, execFileSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { ToolError, loadIgnoreRules, resolveInProject } from "./fsutil.js"
@@ -18,9 +18,42 @@ import type { Tool, ToolContext, ToolResult } from "./types.js"
 
 const CANDIDATES = ["ast-grep", "sg"]
 
-/** True when the binary is on the path. */
+/** The binary that was found, and whether it is really ast-grep. */
+let resolved: { path: string } | undefined
+let looked = false
+
+/**
+ * True when ast-grep is on the path.
+ *
+ * The name alone is not enough: on Linux `sg` is the setgid utility, and
+ * running it with ast-grep's arguments fails quietly. The binary has to
+ * say that it is ast-grep.
+ */
 export function isAstGrepAvailable(): boolean {
-  return CANDIDATES.some((binary) => findOnPath(binary) !== undefined)
+  if (looked) return resolved !== undefined
+  looked = true
+  for (const binary of CANDIDATES) {
+    const found = findOnPath(binary)
+    if (!found) continue
+    if (!saysItIsAstGrep(found)) continue
+    resolved = { path: found }
+    break
+  }
+  return resolved !== undefined
+}
+
+/** Ask the binary what it is. */
+function saysItIsAstGrep(binary: string): boolean {
+  try {
+    const version = execFileSync(binary, ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    })
+    return /ast-grep/i.test(version)
+  } catch {
+    return false
+  }
 }
 
 /** Where a binary is, if it is there at all. */
@@ -77,7 +110,7 @@ export const astGrepTool: Tool = {
       throw new ToolError(`path "${args.path}" is outside the project directory.`)
     }
 
-    const binary = CANDIDATES.find((candidate) => findOnPath(candidate) !== undefined)
+    const binary = isAstGrepAvailable() ? resolved?.path : undefined
     if (!binary) {
       return {
         output:
