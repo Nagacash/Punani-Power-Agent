@@ -47,6 +47,31 @@ const MIME: Record<string, string> = {
   ".wasm": "application/wasm",
 }
 
+/** How many entries the media scan will look at before it gives up. */
+const MAX_MEDIA_ENTRIES = 20_000
+
+/** The files the pane can show: pictures, clips and sound. */
+const MEDIA: Record<string, "image" | "video" | "audio"> = {
+  ".png": "image",
+  ".jpg": "image",
+  ".jpeg": "image",
+  ".webp": "image",
+  ".gif": "image",
+  ".svg": "image",
+  ".mp4": "video",
+  ".webm": "video",
+  ".mov": "video",
+  ".mp3": "audio",
+  ".wav": "audio",
+  ".m4a": "audio",
+  ".ogg": "audio",
+}
+
+/** The kind of a file, when the pane can show it. */
+function mediaKind(name: string): "image" | "video" | "audio" | undefined {
+  return MEDIA[path.extname(name).toLowerCase()]
+}
+
 const IGNORED = new Set([
   "node_modules",
   ".git",
@@ -72,7 +97,7 @@ const IGNORED = new Set([
   "tmp",
 ])
 
-export type PreviewMode = "static" | "url" | "off"
+export type PreviewMode = "static" | "url" | "file" | "off"
 
 /** The script that reloads the page when the source changes. */
 const LIVE_RELOAD = `<script>
@@ -97,6 +122,8 @@ export class PreviewServer extends EventEmitter {
   mode: PreviewMode = "off"
   /** The external dev server to show, when mode is "url". */
   url = ""
+  /** The file to show, when mode is "file". */
+  file = ""
   /** The port the built-in static server listens on. */
   port = 0
 
@@ -110,10 +137,23 @@ export class PreviewServer extends EventEmitter {
     this.restartWatcher()
   }
 
-  /** Turn the preview on, in static or url mode. */
+  /** Turn the preview on, in static, url or file mode. */
   enable(mode: Exclude<PreviewMode, "off">, url?: string): void {
     this.mode = mode
     if (url) this.url = url
+    this.startWatcher()
+    this.emit("state", this.state())
+  }
+
+  /**
+   * Show a file the agent just made.
+   *
+   * A picture or a clip that was just generated is the thing the user wants
+   * to see, so the pane shows it rather than the page behind it.
+   */
+  showFile(relative: string): void {
+    this.file = relative
+    this.mode = "file"
     this.startWatcher()
     this.emit("state", this.state())
   }
@@ -124,8 +164,57 @@ export class PreviewServer extends EventEmitter {
     this.emit("state", this.state())
   }
 
-  state(): { mode: PreviewMode; url: string; port: number } {
-    return { mode: this.mode, url: this.url, port: this.port }
+  state(): { mode: PreviewMode; url: string; file: string; port: number } {
+    return { mode: this.mode, url: this.url, file: this.file, port: this.port }
+  }
+
+  /**
+   * The newest picture, clip or sound the project grew, since a moment.
+   *
+   * The agent writes a picture or renders a clip into the project, and the
+   * pane should show it. The files are found by looking at what changed, so
+   * it does not matter which tool made them.
+   */
+  newestMedia(since: number): { path: string; kind: "image" | "video" | "audio" } | undefined {
+    let newest: { path: string; kind: "image" | "video" | "audio"; at: number } | undefined
+    // The scan runs on the server's thread, so it is bounded: a project with a
+    // huge media folder must not hold the app up.
+    let visited = 0
+    const walk = (dir: string, depth: number): void => {
+      if (depth > 6 || visited > MAX_MEDIA_ENTRIES) return
+      let entries: fs.Dirent[]
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        if (visited > MAX_MEDIA_ENTRIES) return
+        visited++
+        if (entry.name.startsWith(".") || this.ignore.has(entry.name)) continue
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          walk(full, depth + 1)
+          continue
+        }
+        if (!entry.isFile()) continue
+        const kind = mediaKind(entry.name)
+        if (!kind) continue
+        let at = 0
+        try {
+          at = fs.statSync(full).mtimeMs
+        } catch {
+          continue
+        }
+        if (at < since) continue
+        if (!newest || at > newest.at) {
+          newest = { path: path.relative(this.projectRoot, full).split(path.sep).join("/"), kind, at }
+        }
+      }
+    }
+    walk(this.projectRoot, 0)
+    if (!newest) return undefined
+    return { path: newest.path, kind: newest.kind }
   }
 
   /* ---------------------------------------------------------------- */

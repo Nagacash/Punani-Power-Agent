@@ -214,6 +214,8 @@ export class WebServer {
   private abort?: AbortController
   /** Follow-up prompts sent while a turn is still running. */
   private readonly messageQueue: { text: string; images: AttachedImage[] }[] = []
+  /** The file the preview was last pointed at. */
+  private lastMedia = ""
   /** After abort, drop the in-flight user message and partial reply. */
   private revertAfterAbort = false
   /** Invalidates stale forced-stop timers when a new run or abort starts. */
@@ -234,6 +236,7 @@ export class WebServer {
     this.rescanSkills(options.projectRoot)
     this.preview = new PreviewServer(options.projectRoot)
     this.preview.on("reload", () => this.hub.send({ type: "reload" }))
+    this.preview.on("state", (state) => this.hub.send({ type: "preview", ...state }))
     this.extraRoots = options.extraRoots ?? []
     const preset = options.token?.trim()
     this.token =
@@ -1247,6 +1250,8 @@ export class WebServer {
 
   /** Run one turn and send everything it produces to the browser. */
   private async executeTurn(provider: any, key: string | undefined): Promise<void> {
+    // When the turn started, so the pane can tell what it made.
+    const started = Date.now()
     const tools = [
       ...buildTools(this.config.imageSettings(), this.config.audioSettings(), this.mcpTools),
       ...this.skillTools,
@@ -1402,6 +1407,10 @@ export class WebServer {
       usage: result.usage,
     })
 
+    // A picture or a clip the agent just made is the thing the user wants to
+    // see, so the pane shows it.
+    this.showNewMedia(started)
+
     this.messages = result.messages.filter((message) => message.role !== "system")
 
     if (this.revertAfterAbort && result.stoppedReason === "aborted") {
@@ -1431,6 +1440,25 @@ export class WebServer {
     })
     this.hub.send({ type: "state", ...this.snapshot() })
     this.drainMessageQueue()
+  }
+
+  /**
+   * Show what the turn made, in the preview pane.
+   *
+   * The file is found by what changed in the project, so it does not matter
+   * which tool made it: the picture tool, or a skill that rendered a clip.
+   */
+  private showNewMedia(started: number): void {
+    const found = this.preview.newestMedia(started - 250)
+    if (!found) return
+    // The same file again is not news.
+    if (found.path === this.lastMedia) return
+    this.lastMedia = found.path
+    this.preview.showFile(found.path)
+    this.hub.send({
+      type: "notice",
+      text: `The preview is showing ${found.path}, made by this turn.`,
+    })
   }
 
   private drainMessageQueue(): void {
