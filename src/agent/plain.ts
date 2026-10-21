@@ -49,37 +49,99 @@ export function plainText(text: string | undefined | null): string {
  *
  * The whole reply is cleaned at once by `plainText`, but a stream cannot be:
  * a heading marker or a bullet can be split across two chunks. So the text is
- * held back until the line is complete, and each finished line is cleaned on
- * its own. Indentation is kept, because it carries the shape of a code block.
+ * held back until the shape of the line is known, and once it is known the
+ * line streams out as it arrives. A one-line answer therefore appears while
+ * it is being written, not after.
  */
 export interface PlainStream {
-  /** The part of the current line that has not ended yet. */
+  /** The part of the current line that has not been sent yet. */
   pending: string
+  /** True once the current line is plain text and can be sent as it comes. */
+  raw: boolean
 }
 
 export function createPlainStream(): PlainStream {
-  return { pending: "" }
+  return { pending: "", raw: false }
 }
 
 /** Clean the finished lines of a stream, and hold the rest back. */
 export function plainStream(text: string, state: PlainStream): string {
   state.pending += text
-  const parts = state.pending.split("\n")
-  state.pending = parts.pop() ?? ""
-  if (parts.length === 0) return ""
-  return parts.map(plainLine).join("\n") + "\n"
+  let out = ""
+
+  for (;;) {
+    const newline = state.pending.indexOf("\n")
+    if (newline === -1) {
+      if (state.raw) {
+        out += state.pending
+        state.pending = ""
+        return out
+      }
+      const decided = decide(state.pending)
+      if (!decided) return out
+      out += decided.text
+      state.pending = decided.rest
+      state.raw = true
+      continue
+    }
+
+    const line = state.pending.slice(0, newline)
+    const rest = state.pending.slice(newline + 1)
+    out += state.raw ? line : plainLine(line)
+    out += "\n"
+    state.pending = rest
+    state.raw = false
+  }
 }
 
 /** Clean whatever is left when the reply ends. */
 export function flushPlainStream(state: PlainStream): string {
   const rest = state.pending
   state.pending = ""
-  return rest ? plainLine(rest) : ""
+  const text = state.raw ? rest : rest ? plainLine(rest) : ""
+  state.raw = false
+  return text
+}
+
+/**
+ * Work out what a line starts with, before the line is finished.
+ *
+ * Returns null while the answer is still unknown, which happens when the line
+ * could still turn into a bullet, a heading, a rule or a code fence.
+ */
+function decide(partial: string): { text: string; rest: string } | null {
+  // A code fence is a whole line. Wait for it.
+  if (partial.startsWith("```")) return null
+  // A horizontal rule is a whole line too.
+  if (/^[ \t]*[-*_][ \t]*[-*_][ \t]*[-*_]/.test(partial)) return null
+
+  const match = partial.match(/^([ \t]*)([-*+]|#{1,6})([ \t]*)([\s\S]*)$/)
+  if (!match) return { text: partial, rest: "" }
+
+  const indent = match[1] ?? ""
+  const marker = match[2] ?? ""
+  const space = match[3] ?? ""
+  const rest = match[4] ?? ""
+  if (rest === "" && space === "") {
+    // The marker could still be followed by a space, so it could still be a
+    // bullet or a heading. Wait for one more character.
+    return null
+  }
+  if (space === "") {
+    // A marker with no space after it is ordinary text.
+    return { text: partial, rest: "" }
+  }
+  if (marker === "-" || marker === "*" || marker === "+") {
+    return { text: `${indent}• `, rest }
+  }
+  // A heading keeps its text and drops the hashes.
+  return { text: indent, rest }
 }
 
 /** The line-anchored part of `plainText`, with the indentation left alone. */
 function plainLine(line: string): string {
   return line
+    .replace(/^```[a-zA-Z0-9+#.-]*[ \t]*$/, "")
     .replace(/^(\s*)#{1,6}\s+/, "$1")
     .replace(/^(\s*)[-*+][ \t]+/, "$1• ")
     .replace(/^(\s*)([-*_])(?:[ \t]*\2){2,}[ \t]*$/, "$1")

@@ -181,8 +181,12 @@ export function detectVision(row: any): boolean {
     return modalities.some((entry) => String(entry).toLowerCase() === "image")
   }
   if (typeof row?.vision === "boolean") return row.vision
+  // "text+image->text" takes an image; "text->image" makes one.
   const modality = String(row?.architecture?.modality ?? "")
-  if (modality) return /image/.test(modality.toLowerCase())
+  if (modality) {
+    const input = modality.split("->")[0] ?? ""
+    return /image/.test(input.toLowerCase())
+  }
   return false
 }
 

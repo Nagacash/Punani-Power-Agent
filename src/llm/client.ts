@@ -143,7 +143,7 @@ export class LlmClient {
   }
 
   async complete(request: ChatRequest): Promise<CompletionResult> {
-    if (request.onToken) {
+    if (request.onToken || request.onReasoning) {
       return this.completeStreaming(request)
     }
     return this.completeBuffered(request)
@@ -218,11 +218,12 @@ export class LlmClient {
       }
       const message = payload?.choices?.[0]?.message ?? {}
       const parsed = parseChoiceMessage(message)
-      if (parsed.content.trim()) {
-        request.onToken?.(parsed.content)
-      }
+      // The thinking comes first, the same order it arrives in over SSE.
       if (parsed.reasoning) {
         request.onReasoning?.(parsed.reasoning)
+      }
+      if (parsed.content.trim()) {
+        request.onToken?.(parsed.content)
       }
       const usage = usageFromPayload(payload)
       return {

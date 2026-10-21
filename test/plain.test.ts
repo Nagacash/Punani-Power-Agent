@@ -127,15 +127,34 @@ test("a reply that is still arriving is cleaned line by line", () => {
   // A bullet marker split across two chunks still ends up as a bullet.
   const first = plainStream("Here are the options:\n- convert it to ", state)
   const second = plainStream("SVG\n- extract the colors\n", state)
-  assert.equal(first, "Here are the options:\n")
-  assert.equal(second, "• convert it to SVG\n• extract the colors\n")
+  assert.equal(first, "Here are the options:\n• convert it to ")
+  assert.equal(second, "SVG\n• extract the colors\n")
   assert.equal(flushPlainStream(state), "")
+})
+
+test("a one-line answer streams as it arrives, not at the end", () => {
+  const state = createPlainStream()
+  assert.equal(plainStream("The answer is 42", state), "The answer is 42")
+  assert.equal(plainStream(" and that is all", state), " and that is all")
 })
 
 test("the last line of a reply is not lost", () => {
   const state = createPlainStream()
-  plainStream("done\nthe end", state)
-  assert.equal(flushPlainStream(state), "the end")
+  assert.equal(plainStream("done\nthe end", state), "done\nthe end")
+  assert.equal(flushPlainStream(state), "")
+})
+
+test("a heading and a rule are cleaned in a streamed reply", () => {
+  const state = createPlainStream()
+  const out = plainStream("# Title\n---\nbody\n", state)
+  assert.equal(out, "Title\n\nbody\n")
+})
+
+test("a code fence is not shown in a streamed reply", () => {
+  const state = createPlainStream()
+  const out = plainStream("```js\nconst x = 1\n```\n", state)
+  assert.doesNotMatch(out, /```/)
+  assert.match(out, /const x = 1/)
 })
 
 test("indentation survives the cleanup, because it carries the shape of code", () => {

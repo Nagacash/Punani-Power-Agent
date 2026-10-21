@@ -115,8 +115,8 @@ export function buildRoutes(
     for (const route of loadRoutesFile(file, known)) add(route)
   }
   for (const route of routesFromSkills(skills)) {
-    // A route file entry for the same skill wins.
-    if (routes.some((existing) => existing.skill === route.skill)) continue
+    // A route file entry for the same skill wins over the skill's own.
+    if (routes.some((existing) => existing.skill === route.skill && existing.source !== "skill")) continue
     add(route)
   }
   return routes

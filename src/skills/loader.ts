@@ -132,15 +132,17 @@ function asText(value: string | string[] | undefined): string | undefined {
   return value
 }
 
-function parseList(value: string | string[] | undefined): string[] {
+function parseList(value: string | string[] | undefined, splitWords = true): string[] {
   if (value === undefined) return []
   if (Array.isArray(value)) {
     return value.map((item) => String(item).trim().replace(/^["']|["']$/g, "")).filter(Boolean)
   }
   if (!value) return []
+  // A list of names splits on spaces too. A phrase does not: a trigger is
+  // "a change has to be applied and reviewed", not seven words.
   return value
     .replace(/^\[|\]$/g, "")
-    .split(/[,\s]+/)
+    .split(splitWords ? /[,\s]+/g : /,/g)
     .map((item) => item.trim().replace(/^["']|["']$/g, ""))
     .filter(Boolean)
 }
@@ -236,8 +238,8 @@ export function discoverSkills(roots: SkillRoot[]): Skill[] {
         group: asText(meta.subdomain) ?? asText(meta.domain),
         metadata: extra,
         allowedTools: parseList(meta["allowed-tools"]),
-        triggers: parseList(meta["triggers"]),
-        antiTriggers: parseList(meta["anti-triggers"] ?? meta["anti_triggers"]),
+        triggers: parseList(meta["triggers"], false),
+        antiTriggers: parseList(meta["anti-triggers"] ?? meta["anti_triggers"], false),
         requiredReceipts: parseList(meta["required-receipts"] ?? meta["required_receipts"]),
         disableModelInvocation: meta["disable-model-invocation"] === "true",
         file,

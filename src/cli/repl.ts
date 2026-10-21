@@ -1040,7 +1040,16 @@ async function handleCommand(
     }
 
     case "context": {
-      const system = buildSystemPrompt(deps.projectRoot, {}, deps.promptParts ?? { catalog })
+      const model = deps.state.model
+      const system = buildSystemPrompt(
+        deps.projectRoot,
+        {
+          image: deps.config.imageSettings().provider !== "none",
+          audio: deps.config.audioSettings().provider !== "none",
+          vision: model.vision,
+        },
+        deps.promptParts ?? { catalog },
+      )
       process.stdout.write(`${style.gray(system)}\n`)
       return "handled"
     }

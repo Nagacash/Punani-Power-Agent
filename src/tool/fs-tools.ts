@@ -43,11 +43,14 @@ export const readTool: Tool = {
   },
   async run(args: any, context): Promise<ToolResult> {
     const target = ensureReadable(context.projectRoot, String(args.path), context.allowedReadDirs)
+    // A file outside the project is named by the root it came from, so the
+    // permission it asks for is its own.
+    const resource = target.resource ?? target.relative
     const outcome = await context.requestPermission({
       action: "read",
-      resource: target.relative,
-      summary: `Read ${target.relative}`,
-      alwaysPatterns: [target.relative],
+      resource,
+      summary: target.resource ? `Read ${target.resource}` : `Read ${target.relative}`,
+      alwaysPatterns: [resource],
     })
     if (!outcome.granted) {
       return {

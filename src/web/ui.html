@@ -1059,8 +1059,9 @@
           const body = reasoningEl.querySelector(".body");
           // A long train of thought is noise; the plan is in the first lines.
           const CAP = 4000;
-          if (body.textContent.length < CAP) {
-            body.textContent += text;
+          const room = CAP - body.textContent.length;
+          if (room > 0) {
+            body.textContent += text.slice(0, room);
             if (body.textContent.length >= CAP) body.textContent += "\n… thinking continues";
           }
           return;
@@ -1605,6 +1606,7 @@
         if (ev.type === "reload") { if (!$("preview-frame").hidden) reloadFrame(); return; }
         if (ev.type === "done") {
           assistantStreamEl = null;
+          reasoningEl = null;
           usage = ev.usage || usage;
           $("r-tokens").textContent = fmt((usage.inputTokens || 0) + (usage.outputTokens || 0));
           $("r-spent").textContent = "$" + (usage.cost || 0).toFixed(4);

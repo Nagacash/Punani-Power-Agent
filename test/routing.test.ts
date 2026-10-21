@@ -5,6 +5,7 @@ import path from "node:path"
 import { test } from "node:test"
 import { buildRoutes, parseRoutes, renderRoutes } from "../src/skills/routing.ts"
 import { discoverSkills, parseFrontmatter } from "../src/skills/loader.ts"
+import { globToRegex } from "../src/tool/fsutil.ts"
 import { loadAlwaysOn, renderAlwaysOn } from "../src/agent/prompt.ts"
 import { runAgentTurn } from "../src/agent/agent.ts"
 import type { LlmClient } from "../src/llm/client.ts"
@@ -280,4 +281,65 @@ test("a skill's own files can be read, and the rest of the disk cannot", async (
     () => readTool.run({ path: "/etc/hosts" }, context),
     /outside the project/,
   )
+})
+
+test("a skill file that is a symlink out of the library cannot be read", async () => {
+  const root = tempDir("punani-read2-")
+  const library = tempDir("punani-library2-")
+  const dir = path.join(library, "test")
+  fs.mkdirSync(dir, { recursive: true })
+  // A link inside the library that points out of it.
+  const outside = tempDir("punani-outside-")
+  const secret = path.join(outside, "secret.txt")
+  fs.writeFileSync(secret, "not for the agent")
+  fs.symlinkSync(secret, path.join(dir, "escape.txt"), "file")
+
+  const { readTool } = await import("../src/tool/fs-tools.ts")
+  const context: ToolContext = {
+    projectRoot: root,
+    allowedReadDirs: [library],
+    requestPermission: async () => ({ granted: true }),
+    notify: () => {},
+    previewDiff: () => {},
+    mutate: async () => ({ applied: true }),
+  }
+
+  await assert.rejects(
+    () => readTool.run({ path: path.join(dir, "escape.txt") }, context),
+    /outside the project/,
+  )
+})
+
+test("a library file and a project file with the same name do not share a permission", async () => {
+  const root = tempDir("punani-read3-")
+  const library = tempDir("punani-library3-")
+  fs.mkdirSync(path.join(library, "test"), { recursive: true })
+  fs.writeFileSync(path.join(library, "test", "SKILL.md"), "the skill")
+  fs.writeFileSync(path.join(root, "SKILL.md"), "the project file")
+
+  const { readTool } = await import("../src/tool/fs-tools.ts")
+  const asked: string[] = []
+  const context: ToolContext = {
+    projectRoot: root,
+    allowedReadDirs: [library],
+    requestPermission: async (request) => {
+      asked.push(request.resource)
+      return { granted: true }
+    },
+    notify: () => {},
+    previewDiff: () => {},
+    mutate: async () => ({ applied: true }),
+  }
+
+  await readTool.run({ path: "SKILL.md" }, context)
+  await readTool.run({ path: path.join(library, "test", "SKILL.md") }, context)
+  assert.equal(asked.length, 2)
+  assert.notEqual(asked[0], asked[1])
+})
+
+test("a glob with too many alternatives does not become a bomb", () => {
+  const bomb = `{${Array.from({ length: 500 }, (_, i) => "a" + i).join(",")}}.repeat(30)`
+  const started = Date.now()
+  globToRegex(bomb)
+  assert.ok(Date.now() - started < 1000, "the glob should be refused quickly")
 })
