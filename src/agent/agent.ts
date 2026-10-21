@@ -56,7 +56,8 @@ export function buildSystemPrompt(
     "- A declined call is a decision. Do not run it another way, do not try a different command for the same result, and do not build a workaround. Say what you need and wait.",
     "",
     "Skills:",
-    "- When a task matches a skill in the library below, load that one skill first and follow it. Load one, not five.",
+    "- The routing table below says which skill answers which situation. A route that matches the request is a decision, not a hint: load that skill before you start, and follow it.",
+    "- Load one skill, not five.",
     "- A skill that needs a repository, a remote or a pipeline that this project does not have is the wrong skill.",
     "  Say so and work without it. Do not load a big workflow for a small task.",
     "- A skill can ask for receipts: the tools the turn has to have used. Produce them before you say you are done.",
@@ -98,14 +99,16 @@ export function buildSystemPrompt(
   if (media.length > 0) {
     rules.push("", "Media:", ...media)
   }
+  // The routing table goes before the instructions and the index: it is the
+  // part that decides which skill the rest of the turn runs on.
+  if (parts.routes) {
+    rules.push("", parts.routes)
+  }
   if (parts.alwaysOn) {
     rules.push("", parts.alwaysOn)
   }
   if (parts.instructions) {
     rules.push("", parts.instructions)
-  }
-  if (parts.routes) {
-    rules.push("", parts.routes)
   }
   if (parts.catalog) {
     rules.push("", parts.catalog)
