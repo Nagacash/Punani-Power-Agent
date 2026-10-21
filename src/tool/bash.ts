@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { ToolError, resolveInProject } from "./fsutil.js"
-import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
+import { declinedResult, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
@@ -8,28 +8,32 @@ const MAX_OUTPUT_BYTES = 256 * 1024
 
 /** Commands that destroy data or change the machine in a way that is hard to undo. */
 const DESTRUCTIVE_PATTERNS: RegExp[] = [
-  /\brm\s+(-[a-zA-Z]*\s+)*(-[a-zA-Z]*r|-[a-zA-Z]*f|-[a-zA-Z]*rf)\b/,
-  /\brm\s+-rf?\b/,
+  // Remove paths (any invocation with a target, not only -rf).
+  /\brm\s+(-[a-zA-Z]+\s+)*\S/,
   /\bgit\s+reset\s+--hard\b/,
   /\bgit\s+clean\s+-[a-zA-Z]*f/,
   /\bgit\s+checkout\s+--/,
-  /\bgit\s+push\b.*--force/,
+  /\bgit\s+push\b[^\n|;]*(\s(-f|--force)\b|\s\+[\w./-]+|--force-with-lease)/,
   /\bgit\s+branch\s+-D\b/,
   /\bmkfs\b/,
   /\bdd\s+if=.*of=/,
   /\bshutdown\b|\breboot\b|\bhalt\b/,
-  /\bchmod\s+-R\s+777\b/,
+  /\bchmod\b[^\n|;]*\b777\b/,
   /\bchown\s+-R\b/,
   /\bkillall\b/,
-  /\bnpm\s+publish\b/,
+  /\b(npm|pnpm|yarn)\s+publish\b/,
   /\bdocker\s+push\b/,
+  /\bdocker\s+(\w+\s+)*prune\b/,
   /\bsudo\b|\bsu\s+-/,
-  /\btruncate\b|\bshred\b/,
+  /\btruncate\b|\bshred\b|\bunlink\s+\S/,
   /\bfind\b[^|;]*-delete\b/,
+  /\b-exec\s+rm\b/,
   /\bxargs\s+rm\b/,
   /\bcurl\b[^|]*\|\s*(ba)?sh/,
   /\bwget\b[^|]*\|\s*(ba)?sh/,
   />\s*\/dev\/(sd|disk|nvme)/,
+  // Overwrite a file in the project via the shell (not mere stdout redirect).
+  /\s>\s*[^\s|&;]+/,
 ]
 
 export function isDestructiveCommand(command: string): boolean {
@@ -76,10 +80,7 @@ export const bashTool: Tool = {
       alwaysPatterns: [command],
     })
     if (!outcome.granted) {
-      return {
-        output: declinedOutput("to run the command", outcome.message),
-        isError: true,
-      }
+      return declinedResult("to run the command", outcome)
     }
 
     const timeout = Math.min(Number(args.timeout ?? DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS)

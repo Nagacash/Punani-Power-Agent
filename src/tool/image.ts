@@ -1,7 +1,7 @@
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { ToolError, diskMutate, ensureInsideProject } from "./fsutil.js"
-import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
+import { declinedResult, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 /**
  * Image generation.
@@ -236,10 +236,7 @@ export function createImageTool(settings: ImageSettings): Tool {
         alwaysPatterns: [],
       })
       if (!outcome.granted) {
-        return {
-          output: declinedOutput("the image generation", outcome.message),
-          isError: true,
-        }
+        return declinedResult("the image generation", outcome)
       }
 
       if (settings.provider === "kling") {

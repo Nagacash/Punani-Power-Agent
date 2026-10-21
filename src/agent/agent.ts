@@ -198,7 +198,7 @@ export interface AgentTurnResult {
   steps: AgentStepUsage[]
   /** What the summary call cost, when the conversation was folded. */
   compaction?: AgentStepUsage
-  stoppedReason: "finished" | "max_steps" | "aborted" | "error"
+  stoppedReason: "finished" | "max_steps" | "aborted" | "declined" | "error"
   error?: LlmError
 }
 
@@ -231,7 +231,7 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
   let cost = 0
   let switches = 0
   // What the turn actually did, so a skill's receipts can be checked.
-  const turn: TurnState = { loadedSkills: [], toolsUsed: new Set() }
+  const turn: TurnState = { loadedSkills: [], toolsUsed: new Set(), refused: new Set() }
   // The messages this turn produced, for the session log.
   const added: ChatMessage[] = []
   // What each model call cost, so the transcript can say so per step.
@@ -381,7 +381,18 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
     }
 
     for (const call of completion.toolCalls) {
-      await runToolCall(call, toolMap, context, messages, options, turn, added, model)
+      // The same call after a refusal is a loop, not an attempt. Stop.
+      if (turn.refused.has(callKey(call))) {
+        options.onEvent?.({
+          type: "notice",
+          text: `${call.name} was already declined. The turn stops here instead of asking again.`,
+        })
+        return { messages, added, usage: usage(), steps, compaction, stoppedReason: "declined" }
+      }
+      const result = await runToolCall(call, toolMap, context, messages, options, turn, added, model)
+      if (result?.stop) {
+        return { messages, added, usage: usage(), steps, compaction, stoppedReason: "aborted" }
+      }
       if (signal?.aborted) {
         return { messages, added, usage: usage(), steps, compaction, stoppedReason: "aborted" }
       }
@@ -399,6 +410,8 @@ interface TurnState {
   loadedSkills: string[]
   /** The tools the model called. */
   toolsUsed: Set<string>
+  /** The calls the user refused, so the same one is not asked for twice. */
+  refused: Set<string>
 }
 
 /**
@@ -414,7 +427,7 @@ async function runToolCall(
   turn: TurnState,
   added: ChatMessage[],
   model: ModelInfo,
-): Promise<void> {
+): Promise<ToolResult | undefined> {
   const emit = options.onEvent
   let args: any = {}
   try {
@@ -429,7 +442,7 @@ async function runToolCall(
     const failed: ChatMessage = { role: "tool", content: result.output, toolCallId: call.id, name: call.name }
     messages.push(failed)
     added.push(failed)
-    return
+    return result
   }
 
   emit?.({ type: "tool_start", tool: call.name, toolCallId: call.id, args })
@@ -463,6 +476,11 @@ async function runToolCall(
 
   emit?.({ type: "tool_end", tool: call.name, toolCallId: call.id, result })
 
+  // A refusal is remembered. Asking for the same thing again is a loop.
+  if (result.isError && result.output.startsWith("The user declined")) {
+    turn.refused.add(callKey(call))
+  }
+
   if (result.image && model?.vision) {
     const withImage: ChatMessage = {
       role: "tool",
@@ -475,12 +493,18 @@ async function runToolCall(
     }
     messages.push(withImage)
     added.push(withImage)
-    return
+    return result
   }
 
   const plain: ChatMessage = { role: "tool", content: result.output, toolCallId: call.id, name: call.name }
   messages.push(plain)
   added.push(plain)
+  return result
+}
+
+/** What makes a call the same call: the tool and what it was asked to do. */
+function callKey(call: ToolCall): string {
+  return `${call.name}:${call.arguments ?? ""}`
 }
 
 /**

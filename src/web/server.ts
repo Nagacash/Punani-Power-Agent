@@ -1536,7 +1536,13 @@ export class WebServer {
 
     const granted = reply === "once" || reply === "always"
     const remember = reply === "always"
-    const ok = this.permissions.reply(id, { granted, remember, message })
+    const patterns =
+      remember && entry.request.alwaysPatterns?.length
+        ? entry.request.alwaysPatterns
+        : remember
+          ? [entry.request.resource]
+          : undefined
+    const ok = this.permissions.reply(id, { granted, remember, message, patterns })
     return ok ? { ok: true } : { ok: false, error: "unknown permission" }
   }
 

@@ -4,7 +4,7 @@ import net from "node:net"
 import path from "node:path"
 import { isDestructiveCommand } from "./bash.js"
 import { ToolError, resolveInProject } from "./fsutil.js"
-import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
+import { declinedOutput, declinedResult, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 /**
  * Start a dev server and keep it running.
@@ -160,7 +160,7 @@ export const devTool: Tool = {
       alwaysPatterns: [command],
     })
     if (!outcome.granted) {
-      return { output: declinedOutput("to run the command", outcome.message), isError: true }
+      return declinedResult("to run the command", outcome)
     }
 
     // Which of the usual ports were already taken. A server that is not

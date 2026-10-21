@@ -58,7 +58,12 @@ export function interpretPermissionReply(reply: string, request: PermissionReque
   const trimmed = reply.trim()
   const lowered = trimmed.toLowerCase()
 
-  if (lowered === "" || lowered === "y" || lowered === "yes") {
+  if (lowered === "" ) {
+    // Nobody answered. That is not a yes, and it is not a no either: there
+    // is nobody to say it. The turn stops.
+    return { granted: false, unanswered: true }
+  }
+  if (lowered === "y" || lowered === "yes") {
     return { granted: true }
   }
   if (lowered === "a" || lowered === "always") {
