@@ -35,6 +35,36 @@ export function resolveInProject(root: string, candidate: string): ResolvedPath 
   }
 }
 
+/**
+ * Resolve a path for reading.
+ *
+ * The project is the usual answer, but a skill lives outside it and refers to
+ * its own files. Those are readable too, when the caller says where the
+ * library is.
+ */
+export function ensureReadable(
+  root: string,
+  candidate: string,
+  extraDirs: string[] = [],
+): ResolvedPath {
+  const resolved = resolveInProject(root, candidate)
+  if (!resolved.outside) return resolved
+  for (const dir of extraDirs) {
+    const base = path.resolve(dir)
+    if (resolved.absolute === base || resolved.absolute.startsWith(base + path.sep)) {
+      return {
+        absolute: resolved.absolute,
+        relative: path.relative(base, resolved.absolute).split(path.sep).join("/"),
+        outside: false,
+      }
+    }
+  }
+  throw new ToolError(
+    `path "${candidate}" is outside the project directory. Only files inside the project ` +
+      (extraDirs.length > 0 ? "and the skill library " : "") + "can be read.",
+  )
+}
+
 export function ensureInsideProject(root: string, candidate: string): ResolvedPath {
   const resolved = resolveInProject(root, candidate)
   if (resolved.outside) {
@@ -133,11 +163,31 @@ export function parseIgnoreFile(content: string): IgnoreRule[] {
   return rules
 }
 
+/**
+ * Turn a glob into a regular expression.
+ *
+ * `*`, `**` and `?` behave as they do in a shell. `{a,b}` is a set of
+ * alternatives, because a model reaching for a glob almost always writes
+ * `*.{png,jpg}` and expects it to work.
+ */
 export function globToRegex(pattern: string): RegExp {
+  return new RegExp(`^${globSource(pattern)}$`)
+}
+
+function globSource(pattern: string): string {
   let source = ""
   for (let i = 0; i < pattern.length; i++) {
     const char = pattern[i]!
-    if (char === "*") {
+    if (char === "{") {
+      const end = pattern.indexOf("}", i)
+      if (end > i) {
+        const options = pattern.slice(i + 1, end).split(",")
+        source += `(?:${options.map((option) => globSource(option)).join("|")})`
+        i = end
+        continue
+      }
+      source += "\\{"
+    } else if (char === "*") {
       if (pattern[i + 1] === "*") {
         // `**/` matches any number of directories
         if (pattern[i + 2] === "/") {
@@ -158,7 +208,7 @@ export function globToRegex(pattern: string): RegExp {
       source += char
     }
   }
-  return new RegExp(`^${source}$`)
+  return source
 }
 
 export class IgnoreSet {

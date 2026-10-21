@@ -30,9 +30,15 @@ export interface Skill {
   /** The `subdomain` field, when the skill has one. */
   group?: string
   /** Every other frontmatter field, kept as-is. */
-  metadata: Record<string, string>
+  metadata: Record<string, string | string[]>
   /** Tools the skill may use without asking, for the turn it is active in. */
   allowedTools: string[]
+  /** Situations that mean this skill is the one to load. */
+  triggers: string[]
+  /** Situations where this skill is the wrong one. */
+  antiTriggers: string[]
+  /** What the turn has to produce for the work to count as done. */
+  requiredReceipts: string[]
   /** When true the model must not load this skill on its own. */
   disableModelInvocation: boolean
   /** Absolute path of the SKILL.md. */
@@ -56,6 +62,9 @@ export function defaultRoots(projectRoot: string): SkillRoot[] {
     { path: path.join(projectRoot, ".claude", "skills"), source: "project" },
     { path: path.join(os.homedir(), ".agents", "skills"), source: "agent" },
     { path: path.join(os.homedir(), ".claude", "skills"), source: "claude" },
+    // Opencode keeps its own skills here. Without this root the agent cannot
+    // see the ones that only exist for opencode.
+    { path: path.join(os.homedir(), ".config", "opencode", "skills"), source: "opencode" },
   ]
 }
 
@@ -63,32 +72,71 @@ export function defaultRoots(projectRoot: string): SkillRoot[] {
  * Read the frontmatter of a markdown file.
  *
  * Only flat `key: value` pairs, which is the whole format these files use.
+ * A folded value (`description: >-` and the lines under it) is joined into
+ * one line, because that is what the model reads.
  * Unknown keys are kept, not dropped.
  */
-export function parseFrontmatter(text: string): Record<string, string> {
+export function parseFrontmatter(text: string): Record<string, string | string[]> {
   if (!text.startsWith("---")) return {}
   const end = text.indexOf("\n---", 3)
   if (end === -1) return {}
-  const out: Record<string, string> = {}
+  const out: Record<string, string | string[]> = {}
   let key = ""
+  let block = false
+  let literal = false
+  let list = false
   for (const line of text.slice(3, end).split("\n")) {
     const pair = line.match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/)
     if (pair) {
       key = pair[1]!.toLowerCase()
       const value = pair[2]!.trim().replace(/^["']|["']$/g, "")
+      // A block scalar: the value is the lines that follow.
+      if (/^[>|][+-]?$/.test(value)) {
+        out[key] = ""
+        block = true
+        literal = value.startsWith("|")
+        continue
+      }
+      block = false
+      list = value === ""
       if (value) out[key] = value
-      else if (key) out[key] = ""
+      else if (key) out[key] = []
+      continue
+    }
+    if (!key || !line.trim() || line.trimStart().startsWith("#")) continue
+    if (list) {
+      // A YAML list: one "- item" per line.
+      const item = line.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "")
+      if (!item) continue
+      const current = out[key]
+      const list2 = Array.isArray(current) ? current : []
+      list2.push(item)
+      out[key] = list2
+      continue
+    }
+    if (block) {
+      const piece = line.trim()
+      out[key] = out[key] ? `${out[key]}${literal ? "\n" : " "}${piece}` : piece
       continue
     }
     // A continuation of a folded value.
-    if (key && line.trim() && !line.startsWith("#")) {
-      out[key] = `${out[key] ?? ""} ${line.trim()}`.trim()
-    }
+    out[key] = `${out[key] ?? ""} ${line.trim()}`.trim()
   }
   return out
 }
 
-function parseList(value: string | undefined): string[] {
+/** One field of the frontmatter, as plain text. A list takes its first item. */
+function asText(value: string | string[] | undefined): string | undefined {
+  if (value === undefined) return undefined
+  if (Array.isArray(value)) return value[0]
+  return value
+}
+
+function parseList(value: string | string[] | undefined): string[] {
+  if (value === undefined) return []
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim().replace(/^["']|["']$/g, "")).filter(Boolean)
+  }
   if (!value) return []
   return value
     .replace(/^\[|\]$/g, "")
@@ -125,8 +173,19 @@ export function discoverSkills(roots: SkillRoot[]): Skill[] {
       continue
     }
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith(".")) continue
+      if (entry.name.startsWith(".")) continue
       const dir = path.join(root.path, entry.name)
+      // A skill folder is often a symlink to a shared checkout, so the link
+      // has to be followed to know whether it is a folder.
+      let isDirectory = entry.isDirectory()
+      if (!isDirectory && entry.isSymbolicLink()) {
+        try {
+          isDirectory = fs.statSync(dir).isDirectory()
+        } catch {
+          continue
+        }
+      }
+      if (!isDirectory) continue
       let file = path.join(dir, "SKILL.md")
       if (!fs.existsSync(file)) {
         const lower = path.join(dir, "skill.md")
@@ -157,21 +216,29 @@ export function discoverSkills(roots: SkillRoot[]): Skill[] {
         "metadata",
         "allowed-tools",
         "disable-model-invocation",
+        "triggers",
+        "anti-triggers",
+        "anti_triggers",
+        "required-receipts",
+        "required_receipts",
         "subdomain",
         "domain",
       ])
-      const extra: Record<string, string> = {}
+      const extra: Record<string, string | string[]> = {}
       for (const [key, value] of Object.entries(meta)) {
         if (!known.has(key)) extra[key] = value
       }
 
       skills.push({
         name,
-        title: meta.name ?? entry.name,
-        description: meta.description ?? firstParagraph(text),
-        group: meta.subdomain ?? meta.domain,
+        title: asText(meta.name) ?? entry.name,
+        description: asText(meta.description) ?? firstParagraph(text),
+        group: asText(meta.subdomain) ?? asText(meta.domain),
         metadata: extra,
         allowedTools: parseList(meta["allowed-tools"]),
+        triggers: parseList(meta["triggers"]),
+        antiTriggers: parseList(meta["anti-triggers"] ?? meta["anti_triggers"]),
+        requiredReceipts: parseList(meta["required-receipts"] ?? meta["required_receipts"]),
         disableModelInvocation: meta["disable-model-invocation"] === "true",
         file,
         dir,

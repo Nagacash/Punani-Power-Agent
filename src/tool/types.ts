@@ -24,6 +24,12 @@ export interface FileChange {
 export interface ToolContext {
   /** Absolute project root. */
   projectRoot: string
+  /**
+   * Directories that may be read from outside the project, such as the skill
+   * library. A skill refers to its own files, and the agent has to be able to
+   * open them.
+   */
+  allowedReadDirs?: string[]
   /** Ask the user for permission. Resolves true when the action may proceed. */
   requestPermission: (request: PermissionRequest) => Promise<PermissionOutcome>
   /** Report progress to the user, e.g. "applying edit to src/a.ts". */
@@ -87,6 +93,21 @@ export interface ToolResult {
   isError?: boolean
   /** Optional metadata for the session log. */
   meta?: Record<string, unknown>
+}
+
+/**
+ * What the model is told when the user says no.
+ *
+ * The wording matters as much as the refusal. Left to itself, a model treats
+ * "no" as an obstacle and finds another route to the same result. This says
+ * plainly that the answer is final, and that the right move is to ask.
+ */
+export function declinedOutput(what: string, feedback?: string): string {
+  const base =
+    `The user declined ${what}. That is the final answer: do not try again, ` +
+    `do not reach the same result another way, and do not build a workaround. ` +
+    `Say what you need and wait.`
+  return feedback ? `${base} Feedback: ${feedback}` : base
 }
 
 export interface Tool {

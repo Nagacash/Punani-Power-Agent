@@ -43,3 +43,45 @@ export function plainText(text: string | undefined | null): string {
   out = out.replace(/\u0000(\d+)\u0000/g, (_match, index: string) => spans[Number(index)] ?? "")
   return out.trim()
 }
+
+/**
+ * Clean a reply that is still arriving.
+ *
+ * The whole reply is cleaned at once by `plainText`, but a stream cannot be:
+ * a heading marker or a bullet can be split across two chunks. So the text is
+ * held back until the line is complete, and each finished line is cleaned on
+ * its own. Indentation is kept, because it carries the shape of a code block.
+ */
+export interface PlainStream {
+  /** The part of the current line that has not ended yet. */
+  pending: string
+}
+
+export function createPlainStream(): PlainStream {
+  return { pending: "" }
+}
+
+/** Clean the finished lines of a stream, and hold the rest back. */
+export function plainStream(text: string, state: PlainStream): string {
+  state.pending += text
+  const parts = state.pending.split("\n")
+  state.pending = parts.pop() ?? ""
+  if (parts.length === 0) return ""
+  return parts.map(plainLine).join("\n") + "\n"
+}
+
+/** Clean whatever is left when the reply ends. */
+export function flushPlainStream(state: PlainStream): string {
+  const rest = state.pending
+  state.pending = ""
+  return rest ? plainLine(rest) : ""
+}
+
+/** The line-anchored part of `plainText`, with the indentation left alone. */
+function plainLine(line: string): string {
+  return line
+    .replace(/^(\s*)#{1,6}\s+/, "$1")
+    .replace(/^(\s*)[-*+][ \t]+/, "$1• ")
+    .replace(/^(\s*)([-*_])(?:[ \t]*\2){2,}[ \t]*$/, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+}

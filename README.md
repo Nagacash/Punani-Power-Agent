@@ -555,9 +555,9 @@ The agent reads a library of instruction folders, the same shape the
 [agentskills.io](https://agentskills.io) standard defines: a `SKILL.md` with
 `name:` and `description:` in the frontmatter.
 
-Your 926 skills on this machine are already in that format, in
-`~/.agents/skills` and `~/.claude/skills`, plus any you drop in
-`<project>/.punani/skills`. Nothing is bundled with the app and nothing is
+Your skills on this machine are already in that format, in `~/.agents/skills`,
+`~/.claude/skills` and `~/.config/opencode/skills`, plus any you drop in
+`<project>/.punani/skills`. A skill behind a symlink counts too. Nothing is bundled with the app and nothing is
 hard-coded — the library stays where it is and keeps updating.
 
 ```
@@ -572,8 +572,8 @@ Three tools, because a thousand skills cannot go in one prompt:
 | `skill_search` | find one by name, keyword or tag |
 | `skill_load` | read one in full, before doing that kind of work |
 
-The system prompt carries a **table of contents** — 35 groups, about 1,800
-tokens — instead of every description, which would cost roughly 48,000. Grouping
+The system prompt carries a **table of contents** — the groups, not every
+description, which would cost roughly 48,000 tokens. Grouping
 comes from the skill's own `subdomain` field where it has one, and otherwise
 from the word it shares with its siblings, so the design skills land together
 under `design` and the interface ones under `frontend`.
@@ -581,6 +581,59 @@ under `design` and the interface ones under `frontend`.
 A skill body is a file on disk, so it is treated as untrusted input: names and
 descriptions are XML-escaped, and the body cannot close the envelope it is
 delivered in.
+
+### The routing table
+
+A thousand skills and a table of contents still leaves the model guessing. The
+routing table names the skill for the situation, in a line it can act on:
+
+```
+- When the request is a vague idea that needs shaping into a scope, load the `scope` skill.
+```
+
+Routes come from two places. A skill can declare its own in its frontmatter:
+
+```yaml
+---
+name: naga-align
+triggers:
+  - requirements are fuzzy and have to be grilled before building
+anti_triggers:
+  - the request is already precise
+required_receipts: [read, bash]
+---
+```
+
+And a routes file names them for the whole machine
+(`<config>/routes.md`) or for one project (`.punani/routes.md`):
+
+```
+when: the request is a vague idea that needs shaping into a scope -> scope
+when: a diff needs a standards review and a spec review -> naga-review
+```
+
+The file wins over the skill's own triggers, because the file is the one a
+person edits. `/skill routes` shows the table, `/skill <words>` finds a skill
+that is not in it.
+
+`required_receipts` are the tools a turn has to have used for the work to
+count as done. When a turn finishes without them, punani says so.
+
+### The always-on files
+
+The rules the agent always follows are files, not code. A file can be edited
+by a person, by the agent, or by a harness that measures the agent and
+rewrites what did not work.
+
+| File | What it holds |
+| --- | --- |
+| `.punani/guardrails.md` | what the agent must not do |
+| `.punani/tool_guidance.md` | how to use the tools here |
+| `.punani/memory.md` | what the agent learned about this project |
+| `<config>/memory.md` | the same, for every project |
+
+They are read on every turn and share one budget, so they cost the same as
+any other part of the prompt. `/context` shows the whole thing.
 
 ## Working without a terminal
 
@@ -681,6 +734,7 @@ $ punani --resume ses_mvgkk6lnikjk51
 | Command | Effect |
 | --- | --- |
 | `/help` | list every command |
+| `/skill <words>` | find a skill, or read one with `/skill load <name>` |
 | `/models [filter]` | list models, optionally by provider or substring |
 | `/model <provider/model>` | set the default model |
 | `/provider` | list providers and whether a key is stored |

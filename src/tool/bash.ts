@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { ToolError, resolveInProject } from "./fsutil.js"
-import type { Tool, ToolContext, ToolResult } from "./types.js"
+import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
@@ -62,14 +62,14 @@ export const bashTool: Tool = {
       summary: `Run: ${command}`,
       detail: destructive
         ? "This command can delete or overwrite data. Check it carefully before approving."
-        : `Working directory: ${workdir.relative}`,
+        : `Working directory: ${workdir.absolute}`,
       destructive,
       // Approving a command always whitelists this exact command for the session.
       alwaysPatterns: [command],
     })
     if (!outcome.granted) {
       return {
-        output: `The user declined to run the command.${outcome.message ? ` Feedback: ${outcome.message}` : ""}`,
+        output: declinedOutput("to run the command", outcome.message),
         isError: true,
       }
     }

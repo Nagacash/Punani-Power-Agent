@@ -3,6 +3,7 @@ import path from "node:path"
 import {
   ToolError,
   ensureInsideProject,
+  ensureReadable,
   globToRegex,
   loadIgnoreRules,
   readTextFile,
@@ -19,7 +20,7 @@ const IMAGE_TYPES: Record<string, string> = {
 
 /** Largest image the read tool will hand to the model. */
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
-import type { Tool, ToolResult } from "./types.js"
+import { declinedOutput, type Tool, type ToolResult } from "./types.js"
 
 const MAX_READ_BYTES = 2 * 1024 * 1024
 const DEFAULT_LIMIT = 2000
@@ -41,7 +42,7 @@ export const readTool: Tool = {
     required: ["path"],
   },
   async run(args: any, context): Promise<ToolResult> {
-    const target = ensureInsideProject(context.projectRoot, String(args.path))
+    const target = ensureReadable(context.projectRoot, String(args.path), context.allowedReadDirs)
     const outcome = await context.requestPermission({
       action: "read",
       resource: target.relative,
@@ -50,7 +51,7 @@ export const readTool: Tool = {
     })
     if (!outcome.granted) {
       return {
-        output: `The user declined to read ${target.relative}.${outcome.message ? ` Feedback: ${outcome.message}` : ""}`,
+        output: declinedOutput(`to read ${target.relative}`, outcome.message),
         isError: true,
       }
     }
@@ -119,7 +120,7 @@ export const globTool: Tool = {
       alwaysPatterns: [`glob:${pattern}`],
     })
     if (!outcome.granted) {
-      return { output: `The user declined the file search.${outcome.message ? ` Feedback: ${outcome.message}` : ""}`, isError: true }
+      return { output: declinedOutput("the file search", outcome.message), isError: true }
     }
     const results = await findByGlob(context.projectRoot, pattern, limit)
     if (results.length === 0) return { output: `No files matched ${pattern}` }
@@ -163,7 +164,7 @@ export const grepTool: Tool = {
       alwaysPatterns: [`grep:${pattern}`],
     })
     if (!outcome.granted) {
-      return { output: `The user declined the search.${outcome.message ? ` Feedback: ${outcome.message}` : ""}`, isError: true }
+      return { output: declinedOutput("the search", outcome.message), isError: true }
     }
 
     const matches: string[] = []

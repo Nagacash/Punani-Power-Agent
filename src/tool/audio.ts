@@ -1,7 +1,7 @@
 import path from "node:path"
 import { ToolError, ensureInsideProject } from "./fsutil.js"
 import { extensionFor, synthesize } from "../provider/elevenlabs.js"
-import type { Tool, ToolContext, ToolResult } from "./types.js"
+import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 /**
  * Speech generation.
@@ -84,7 +84,7 @@ export function createAudioTool(settings: AudioSettings): Tool {
       })
       if (!outcome.granted) {
         return {
-          output: `The user declined to generate the audio.${outcome.message ? ` Feedback: ${outcome.message}` : ""}`,
+          output: declinedOutput("the audio generation", outcome.message),
           isError: true,
         }
       }

@@ -1,7 +1,7 @@
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { ToolError, diskMutate, ensureInsideProject } from "./fsutil.js"
-import type { Tool, ToolContext, ToolResult } from "./types.js"
+import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 /**
  * Image generation.
@@ -237,7 +237,7 @@ export function createImageTool(settings: ImageSettings): Tool {
       })
       if (!outcome.granted) {
         return {
-          output: `The user declined to generate the image.${outcome.message ? ` Feedback: ${outcome.message}` : ""}`,
+          output: declinedOutput("the image generation", outcome.message),
           isError: true,
         }
       }

@@ -165,12 +165,24 @@ function detectReasoning(row: any): boolean {
   return false
 }
 
-function detectVision(row: any): boolean {
-  const modalities: string[] = row?.input_modalities ?? row?.modalities?.input ?? []
+/**
+ * Whether a model takes images as input.
+ *
+ * OpenRouter nests the modalities under `architecture`, and every other
+ * provider puts them at the top level, so both are read. Getting this wrong
+ * means the agent never sees a picture the user pointed it at.
+ */
+export function detectVision(row: any): boolean {
+  const modalities: string[] = [
+    ...(row?.architecture?.input_modalities ?? []),
+    ...(row?.input_modalities ?? row?.modalities?.input ?? []),
+  ]
   if (Array.isArray(modalities) && modalities.length > 0) {
     return modalities.some((entry) => String(entry).toLowerCase() === "image")
   }
   if (typeof row?.vision === "boolean") return row.vision
+  const modality = String(row?.architecture?.modality ?? "")
+  if (modality) return /image/.test(modality.toLowerCase())
   return false
 }
 

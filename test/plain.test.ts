@@ -3,7 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
-import { plainText } from "../src/agent/plain.ts"
+import { createPlainStream, flushPlainStream, plainStream, plainText } from "../src/agent/plain.ts"
 
 /**
  * Replies are read as plain text, so markdown syntax would show up as its own
@@ -120,4 +120,26 @@ test("both copies agree", () => {
   for (const sample of samples) {
     assert.equal(plain(sample), plainText(sample), `they disagree on: ${sample}`)
   }
+})
+
+test("a reply that is still arriving is cleaned line by line", () => {
+  const state = createPlainStream()
+  // A bullet marker split across two chunks still ends up as a bullet.
+  const first = plainStream("Here are the options:\n- convert it to ", state)
+  const second = plainStream("SVG\n- extract the colors\n", state)
+  assert.equal(first, "Here are the options:\n")
+  assert.equal(second, "• convert it to SVG\n• extract the colors\n")
+  assert.equal(flushPlainStream(state), "")
+})
+
+test("the last line of a reply is not lost", () => {
+  const state = createPlainStream()
+  plainStream("done\nthe end", state)
+  assert.equal(flushPlainStream(state), "the end")
+})
+
+test("indentation survives the cleanup, because it carries the shape of code", () => {
+  const state = createPlainStream()
+  const out = plainStream("```\n    const x = 1\n", state)
+  assert.match(out, / {4}const x = 1/)
 })
