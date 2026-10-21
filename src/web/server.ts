@@ -13,6 +13,8 @@ import { createSkillTools } from "../tool/skill.js"
 import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex } from "../skills/loader.js"
 import { McpRegistry } from "../mcp/registry.js"
 import { buildSystemPrompt, describeProject, runAgentTurn } from "../agent/agent.js"
+import { loadAlwaysOn, renderAlwaysOn } from "../agent/prompt.js"
+import { buildRoutes, renderRoutes } from "../skills/routing.js"
 import { stopDevServers } from "../tool/dev.js"
 import { loadProjectInstructions } from "../agent/instructions.js"
 import { PermissionEngine, resolvePermission } from "../agent/permission.js"
@@ -160,6 +162,8 @@ export class WebServer {
   private skillTools: Tool[] = []
   private skillCatalog = ""
   private projectInstructions = ""
+  private skillRoutes = ""
+  private alwaysOn = ""
   /**
    * Keys the browser sent with this request. They are used for the call and
    * then forgotten: the server never writes them to disk.
@@ -317,6 +321,8 @@ export class WebServer {
     this.skillTools = createSkillTools(groups, skills)
     this.skillCatalog = renderGroupIndex(groups)
     this.projectInstructions = loadProjectInstructions(root).text
+    this.skillRoutes = renderRoutes(buildRoutes(root, skills))
+    this.alwaysOn = renderAlwaysOn(loadAlwaysOn(root))
   }
 
   /** Start the MCP servers and collect their tools. */
@@ -1161,6 +1167,7 @@ export class WebServer {
     })
 
     const context: ToolContext = {
+      allowedReadDirs: defaultRoots(this.projectRoot).map((root) => root.path),
       projectRoot: this.projectRoot,
       requestPermission: (request) =>
         resolvePermission(this.permissionEngine, request, async (pending) => {
@@ -1211,8 +1218,12 @@ export class WebServer {
         audio: audioSettings.provider !== "none",
         vision: this.model?.vision === true,
       },
-      this.skillCatalog,
-      this.projectInstructions,
+      {
+        catalog: this.skillCatalog,
+        instructions: this.projectInstructions,
+        routes: this.skillRoutes,
+        alwaysOn: this.alwaysOn,
+      },
     )
     const result = await runAgentTurn(
       {
@@ -1227,7 +1238,7 @@ export class WebServer {
             this.hub.send({ type: "assistant", text: event.text, delta: event.partial === true })
           }
           if (event.type === "reasoning" && event.text) {
-            this.hub.send({ type: "reasoning", text: event.text })
+            this.hub.send({ type: "reasoning", text: event.text, delta: event.partial === true })
           }
           if (event.type === "tool_start") {
             this.currentToolId = event.toolCallId

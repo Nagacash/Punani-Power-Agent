@@ -8,22 +8,8 @@ import {
   type Skill,
   type SkillGroup,
 } from "../skills/loader.js"
+import { searchSkills } from "../skills/search.js"
 import type { Tool, ToolResult } from "./types.js"
-
-const STOP = new Set([
-  "the", "and", "for", "with", "that", "this", "you", "your", "are", "was", "not",
-  "from", "into", "when", "how", "what", "why", "can", "will", "should", "would",
-  "make", "build", "create", "add", "use", "using", "get", "set", "run", "code",
-])
-
-function terms(text: string): Set<string> {
-  const out = new Set<string>()
-  for (const word of text.toLowerCase().split(/[^a-z0-9+#.-]+/)) {
-    if (word.length < 3 || STOP.has(word)) continue
-    out.add(word)
-  }
-  return out
-}
 
 /**
  * The skill tools.
@@ -79,7 +65,8 @@ export function createSkillTools(groups: SkillGroup[], skills: Skill[]): Tool[] 
     name: "skill_search",
     description:
       "Find skills by name, keyword or tag. Use it when you know roughly what you need but " +
-      "not which group holds it.",
+      "not which group holds it. The routing table in the prompt names the skill for the " +
+      "common cases; search when it does not.",
     permissionAction: "skill",
     parameters: {
       type: "object",
@@ -93,30 +80,14 @@ export function createSkillTools(groups: SkillGroup[], skills: Skill[]): Tool[] 
       const query = String(args.query ?? "").trim()
       if (!query) throw new ToolError("a query is required")
       const limit = Math.max(1, Math.min(40, Number(args.limit ?? 10)))
-      const words = terms(query)
+      const found = searchSkills(skills, query, limit)
 
-      const scored = skills
-        .map((skill) => {
-          const meta = Object.values(skill.metadata).join(" ")
-          const haystack = terms(`${skill.name} ${skill.description} ${meta}`)
-          let score = 0
-          for (const word of haystack) {
-            if (!words.has(word)) continue
-            score += skill.name.includes(word) ? 5 : skill.name.toLowerCase().includes(word) ? 3 : 1
-          }
-          if (skill.name.toLowerCase().startsWith(query.toLowerCase())) score += 20
-          return { skill, score }
-        })
-        .filter((entry) => entry.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit)
-
-      if (scored.length === 0) {
+      if (found.length === 0) {
         return { output: `no skill matched "${query}".` }
       }
       return {
-        output: renderSkillEntries(scored.map((entry) => entry.skill)),
-        meta: { query, count: scored.length },
+        output: renderSkillEntries(found),
+        meta: { query, count: found.length },
       }
     },
   }
@@ -163,6 +134,11 @@ export function createSkillTools(groups: SkillGroup[], skills: Skill[]): Tool[] 
         `Directory: ${skill.dir}`,
         skill.allowedTools.length > 0
           ? `These tools are pre-approved for this turn only: ${skill.allowedTools.join(", ")}.`
+          : "",
+        skill.triggers.length > 0 ? `Use it when: ${skill.triggers.join("; ")}.` : "",
+        skill.antiTriggers.length > 0 ? `Not for: ${skill.antiTriggers.join("; ")}.` : "",
+        skill.requiredReceipts.length > 0
+          ? `Receipts: the turn must use ${skill.requiredReceipts.join(", ")} before it is done.`
           : "",
         "",
       ]

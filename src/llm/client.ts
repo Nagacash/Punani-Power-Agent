@@ -70,6 +70,8 @@ export interface ChatRequest {
   maxOutputTokens?: number
   /** When set, uses SSE streaming and emits text as it arrives. */
   onToken?: (delta: string) => void
+  /** When set, emits the model's thinking as it arrives. */
+  onReasoning?: (delta: string) => void
 }
 
 export interface LlmClientOptions {
@@ -141,7 +143,7 @@ export class LlmClient {
   }
 
   async complete(request: ChatRequest): Promise<CompletionResult> {
-    if (request.onToken) {
+    if (request.onToken || request.onReasoning) {
       return this.completeStreaming(request)
     }
     return this.completeBuffered(request)
@@ -216,6 +218,10 @@ export class LlmClient {
       }
       const message = payload?.choices?.[0]?.message ?? {}
       const parsed = parseChoiceMessage(message)
+      // The thinking comes first, the same order it arrives in over SSE.
+      if (parsed.reasoning) {
+        request.onReasoning?.(parsed.reasoning)
+      }
       if (parsed.content.trim()) {
         request.onToken?.(parsed.content)
       }
@@ -293,9 +299,11 @@ export class LlmClient {
           }
           if (typeof delta.reasoning === "string" && delta.reasoning) {
             reasoning += delta.reasoning
+            request.onReasoning?.(delta.reasoning)
           }
           if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
             reasoning += delta.reasoning_content
+            request.onReasoning?.(delta.reasoning_content)
           }
 
           for (const part of delta.tool_calls ?? []) {

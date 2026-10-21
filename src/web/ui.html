@@ -1046,7 +1046,27 @@
         add(el);
       }
 
-      function reasoningMsg(text) {
+      let reasoningEl = null;
+      /** The card the model's thinking streams into. */
+      function reasoningMsg(text, delta) {
+        if (delta) {
+          if (!reasoningEl) {
+            reasoningEl = document.createElement("div");
+            reasoningEl.className = "reason";
+            reasoningEl.innerHTML = `<div class="who">thinking</div><div class="body"></div>`;
+            add(reasoningEl);
+          }
+          const body = reasoningEl.querySelector(".body");
+          // A long train of thought is noise; the plan is in the first lines.
+          const CAP = 4000;
+          const room = CAP - body.textContent.length;
+          if (room > 0) {
+            body.textContent += text.slice(0, room);
+            if (body.textContent.length >= CAP) body.textContent += "\n… thinking continues";
+          }
+          return;
+        }
+        reasoningEl = null;
         const el = document.createElement("div");
         el.className = "reason";
         el.innerHTML = `<div class="who">thinking</div><div class="body"></div>`;
@@ -1576,7 +1596,7 @@
         if (ev.type === "history") { rebuildFromHistory(ev.messages); return; }
         if (ev.type === "revert") { applyRevert(ev.text || ""); return; }
         if (ev.type === "assistant") { assistantMsg(ev.text, ev.delta === true); return; }
-        if (ev.type === "reasoning") { reasoningMsg(ev.text); return; }
+        if (ev.type === "reasoning") { reasoningMsg(ev.text, ev.delta === true); return; }
         if (ev.type === "tool_start") { cards[ev.id] = toolCard(ev.tool, ev.args); return; }
         if (ev.type === "tool_end") { const c = cards[ev.id]; if (c) toolEnd(c, ev.output, ev.isError, ev.meta); return; }
         if (ev.type === "diff") { diffCard(ev, ev.id && cards[ev.id] ? cards[ev.id].querySelector(".core") : null); return; }
@@ -1586,6 +1606,7 @@
         if (ev.type === "reload") { if (!$("preview-frame").hidden) reloadFrame(); return; }
         if (ev.type === "done") {
           assistantStreamEl = null;
+          reasoningEl = null;
           usage = ev.usage || usage;
           $("r-tokens").textContent = fmt((usage.inputTokens || 0) + (usage.outputTokens || 0));
           $("r-spent").textContent = "$" + (usage.cost || 0).toFixed(4);

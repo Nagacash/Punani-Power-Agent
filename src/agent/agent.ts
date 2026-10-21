@@ -5,26 +5,61 @@ import { LlmError } from "../llm/errors.js"
 import type { ModelInfo } from "../provider/types.js"
 import { estimateCost } from "../provider/types.js"
 import { toDefinition, type Tool, type ToolContext, type ToolResult } from "../tool/types.js"
+import type { Skill } from "../skills/loader.js"
 
 /** The system prompt. It states the operating rules the agent must follow. */
+export interface PromptParts {
+  /** The skill index. */
+  catalog?: string
+  /** The project's own instruction files. */
+  instructions?: string
+  /** The always-on files: guardrails, tool guidance, memory. */
+  alwaysOn?: string
+  /** The routing table: which skill answers which situation. */
+  routes?: string
+}
+
 export function buildSystemPrompt(
   projectRoot: string,
   capabilities: { image?: boolean; audio?: boolean; vision?: boolean } = {},
-  catalog: string = "",
-  instructions: string = "",
+  parts: PromptParts = {},
 ): string {
-  const relative = path.relative(process.cwd(), projectRoot) || "."
+  // A relative path is easier to read, but only while it stays short. A path
+  // that climbs out of the current directory is worse than the absolute one.
+  const relative = (() => {
+    const rel = path.relative(process.cwd(), projectRoot)
+    if (!rel || rel.startsWith("..")) return projectRoot
+    return rel
+  })()
   const rules = [
     `You are Punani powerd, a terminal coding agent by Naga Codex, working inside the project at ${relative}.`,
     "",
-    "Operating rules:",
+    "Answer first:",
+    "- The user reads the reply, not your thinking. Keep deliberation in your thinking, never in the reply.",
+    "- Lead with the answer or the plan. No preamble, no restating the question, no recap.",
+    "- If the question can be answered without tools, answer it and stop. Do not explore the project to be helpful.",
+    "- A greeting, an opinion or a question about what you were already shown is answered, not investigated.",
+    "",
+    "Working in the project:",
     "- Use the tools to inspect and change files. Do not guess file contents; read them first.",
-    "- Prefer `edit` over `write` for changes to existing files. `write` replaces a whole file.",
     "- Never invent file paths. Use `glob` or `grep` to find them.",
-    "- Shell commands need the user's approval. Explain in one line why a command is needed.",
+    "- Prefer `edit` over `write` for changes to existing files. `write` replaces a whole file.",
+    "- Use the fewest calls that answer the question. One `bash` command that prints what you need beats three that print it piecemeal.",
+    "- Do not explore what one read answers. Do not run a command whose answer you already have:",
+    "  a second directory listing, a git log in a directory that is not a repository, a search for a file you were told about.",
+    "- When the meaning of the request changes the work, ask one question. Do not go looking for context that is not there.",
     "- Make the smallest change that solves the problem. Match the surrounding code style.",
-    "- After editing, state clearly what changed and whether it was verified.",
-    "- If a task needs information you cannot get from the tools, say so plainly.",
+    "- Never leave scratch files in the project. A throwaway script belongs in the system temp directory.",
+    "",
+    "The user approves every command and every write:",
+    "- Explain in one line why a command is needed, then run it.",
+    "- A declined call is a decision. Do not run it another way, do not try a different command for the same result, and do not build a workaround. Say what you need and wait.",
+    "",
+    "Skills:",
+    "- When a task matches a skill in the library below, load that one skill first and follow it. Load one, not five.",
+    "- A skill that needs a repository, a remote or a pipeline that this project does not have is the wrong skill.",
+    "  Say so and work without it. Do not load a big workflow for a small task.",
+    "- A skill can ask for receipts: the tools the turn has to have used. Produce them before you say you are done.",
     "",
     "How to write:",
     "- Plain prose. No markdown: no **bold**, no # headings, no ``` code fences, no tables.",
@@ -33,6 +68,15 @@ export function buildSystemPrompt(
     "- When something fails, say what failed, why it failed, and what to do next.",
     "  Never answer with a bare error string like 'connection refused'.",
     "- Put commands, paths and code in backticks so they read as one item.",
+    "- After editing, state clearly what changed and whether it was verified.",
+    "- If a task needs information you cannot get from the tools, say so plainly.",
+    "",
+    "Voice:",
+    "- Write like a person, not a chatbot. No 'Great question', no 'I hope this helps', no 'Let me know if'.",
+    "- No puffery: delve, leverage, robust, seamless, comprehensive, pivotal, landscape, ensure. Say what happened.",
+    "- No 'not just X but Y', no rule of three, no bold label followed by a colon.",
+    "- No em dash. Use a comma or a full stop.",
+    "- Take a position. Do not hedge every sentence with 'might' or 'could'.",
   ]
 
   const media: string[] = []
@@ -48,24 +92,30 @@ export function buildSystemPrompt(
   }
   if (capabilities.vision) {
     media.push(
-      "- You can see images. After generating a picture, read it back with `read` to check it, then iterate on the prompt until it is right.",
+      "- You can see images. Reading a picture shows you the picture itself: look at it before you describe it, and never guess its contents.",
     )
   }
   if (media.length > 0) {
     rules.push("", "Media:", ...media)
   }
-  if (instructions) {
-    rules.push("", instructions)
+  if (parts.alwaysOn) {
+    rules.push("", parts.alwaysOn)
   }
-  if (catalog) {
-    rules.push("", catalog)
+  if (parts.instructions) {
+    rules.push("", parts.instructions)
+  }
+  if (parts.routes) {
+    rules.push("", parts.routes)
+  }
+  if (parts.catalog) {
+    rules.push("", parts.catalog)
   }
 
   return rules.join("\n")
 }
 
 export interface AgentEvent {
-  type: "assistant_text" | "reasoning" | "tool_start" | "tool_end" | "error" | "usage" | "done"
+  type: "assistant_text" | "reasoning" | "tool_start" | "tool_end" | "error" | "usage" | "done" | "notice"
   text?: string
   /** True when `text` is a streaming chunk, not the full reply. */
   partial?: boolean
@@ -83,6 +133,8 @@ export interface AgentOptions {
   tools: Tool[]
   projectRoot: string
   context: ToolContext
+  /** The skill library, so the turn can check what a loaded skill asked for. */
+  skills?: Skill[]
   maxSteps?: number
   signal?: AbortSignal
   onEvent?: (event: AgentEvent) => void
@@ -110,6 +162,8 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
   const messages: ChatMessage[] = [...history]
   let inputTokens = 0
   let outputTokens = 0
+  // What the turn actually did, so a skill's receipts can be checked.
+  const turn: TurnState = { loadedSkills: [], toolsUsed: new Set() }
 
   for (let step = 0; step < maxSteps; step++) {
     if (signal?.aborted) {
@@ -118,6 +172,7 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
 
     let completion
     let streamedText = false
+    let streamedReasoning = false
     try {
       completion = await client.complete({
         model: model.id,
@@ -128,6 +183,12 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
           ? (delta) => {
               streamedText = true
               options.onEvent?.({ type: "assistant_text", text: delta, partial: true })
+            }
+          : undefined,
+        onReasoning: options.onEvent
+          ? (delta) => {
+              streamedReasoning = true
+              options.onEvent?.({ type: "reasoning", text: delta, partial: true })
             }
           : undefined,
       })
@@ -154,7 +215,7 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
       toolCalls: completion.toolCalls.length ? completion.toolCalls : undefined,
     }
     messages.push(assistantMessage)
-    if (completion.reasoning) {
+    if (completion.reasoning && !streamedReasoning) {
       options.onEvent?.({ type: "reasoning", text: completion.reasoning })
     }
     if (completion.content.trim() && !streamedText) {
@@ -163,11 +224,12 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
 
     if (completion.toolCalls.length === 0) {
       options.onEvent?.({ type: "usage", usage: usageOf(inputTokens, outputTokens, model) })
+      checkReceipts(options, turn.loadedSkills, turn.toolsUsed)
       return { messages, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "finished" }
     }
 
     for (const call of completion.toolCalls) {
-      await runToolCall(call, toolMap, context, messages, options)
+      await runToolCall(call, toolMap, context, messages, options, turn)
       if (signal?.aborted) {
         return { messages, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "aborted" }
       }
@@ -178,12 +240,21 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
   return { messages, usage: usageOf(inputTokens, outputTokens, model), stoppedReason: "max_steps" }
 }
 
+/** What the turn did, so a skill's receipts can be checked at the end. */
+interface TurnState {
+  /** The skills the model loaded, by name. */
+  loadedSkills: string[]
+  /** The tools the model called. */
+  toolsUsed: Set<string>
+}
+
 async function runToolCall(
   call: ToolCall,
   toolMap: Map<string, Tool>,
   context: ToolContext,
   messages: ChatMessage[],
   options: AgentOptions,
+  turn: TurnState,
 ): Promise<void> {
   const model = options.model
   const emit = options.onEvent
@@ -202,6 +273,11 @@ async function runToolCall(
   }
 
   emit?.({ type: "tool_start", tool: call.name, toolCallId: call.id, args })
+  turn.toolsUsed.add(call.name)
+  if (call.name === "skill_load") {
+    const loaded = String(args?.name ?? "").toLowerCase()
+    if (loaded && !turn.loadedSkills.includes(loaded)) turn.loadedSkills.push(loaded)
+  }
 
   const tool = toolMap.get(call.name)
   let result: ToolResult
@@ -218,10 +294,15 @@ async function runToolCall(
     }
   }
 
-  emit?.({ type: "tool_end", tool: call.name, toolCallId: call.id, result })
-
   // A picture the model can see is sent as an image part, so the agent can
   // look at what it just made and refine it.
+  if (result.image && !model?.vision) {
+    result.output += " (this model cannot see images, so it was not attached. Say so, do not build a workaround.)"
+    result.isError = true
+  }
+
+  emit?.({ type: "tool_end", tool: call.name, toolCallId: call.id, result })
+
   if (result.image && model?.vision) {
     messages.push({
       role: "tool",
@@ -234,11 +315,29 @@ async function runToolCall(
     })
     return
   }
-  if (result.image && !model?.vision) {
-    result.output += " (this model cannot see images, so it was not attached)"
-  }
 
   messages.push({ role: "tool", content: result.output, toolCallId: call.id, name: call.name })
+}
+
+/**
+ * Check the receipts a loaded skill asked for.
+ *
+ * A receipt is a tool the turn had to use. The agent is told when one is
+ * missing, so a claim of "done" can be checked against what happened.
+ */
+function checkReceipts(options: AgentOptions, loaded: string[], used: Set<string>): void {
+  const skills = options.skills
+  if (!skills || loaded.length === 0) return
+  for (const name of loaded) {
+    const skill = skills.find((entry) => entry.name === name)
+    if (!skill || skill.requiredReceipts.length === 0) continue
+    const missing = skill.requiredReceipts.filter((receipt) => !used.has(receipt))
+    if (missing.length === 0) continue
+    options.onEvent?.({
+      type: "notice",
+      text: `The ${skill.name} skill asked for ${missing.join(", ")}, and the turn did not use ${missing.length === 1 ? "it" : "them"}.`,
+    })
+  }
 }
 
 function usageOf(inputTokens: number, outputTokens: number, model: ModelInfo) {

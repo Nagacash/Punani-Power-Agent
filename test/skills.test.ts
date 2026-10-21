@@ -50,6 +50,34 @@ test("skills are discovered, deduplicated and named after their directory", () =
   assert.equal(alpha!.description, "The first one.")
 })
 
+test("a folded description is read as one line, without the marker", () => {
+  const meta = parseFrontmatter(
+    [
+      "---",
+      "name: folded",
+      "description: >-",
+      "  A description that runs",
+      "  over two lines.",
+      "---",
+      "",
+      "body",
+    ].join("\n"),
+  )
+  assert.equal(meta.description, "A description that runs over two lines.")
+})
+
+test("a skill behind a symlink is still found", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "punani-skills4-"))
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), "punani-skill-src-"))
+  writeSkill(source, "linked", "name: linked\ndescription: Behind a link.\n")
+  fs.symlinkSync(path.join(source, "linked"), path.join(root, "linked"), "dir")
+
+  const skills = discoverSkills([{ path: root, source: "test" }])
+  assert.equal(skills.length, 1)
+  assert.equal(skills[0]!.name, "linked")
+  assert.equal(skills[0]!.description, "Behind a link.")
+})
+
 test("a skill with unknown frontmatter fields still loads", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "punani-skills3-"))
   writeSkill(root, "gamma", "name: gamma\ndescription: A thing.\nmitre_attack: T1059\nnist_csf: PR.1\n")

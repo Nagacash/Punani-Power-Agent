@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import { diffStats, diffLines } from "./diff.js"
 import { ToolError, ensureInsideProject, readTextFile } from "./fsutil.js"
-import type { Tool, ToolContext, ToolResult } from "./types.js"
+import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 /** Create a file or replace its whole content. */
 export const writeTool: Tool = {
@@ -39,7 +39,7 @@ export const writeTool: Tool = {
     })
     if (!outcome.granted) {
       return {
-        output: `The user declined to write ${target.relative}.${outcome.message ? ` Feedback: ${outcome.message}` : ""}`,
+        output: declinedOutput(`to write ${target.relative}`, outcome.message),
         isError: true,
       }
     }
@@ -126,7 +126,7 @@ export const editTool: Tool = {
     })
     if (!outcome.granted) {
       return {
-        output: `The user declined the edit to ${target.relative}.${outcome.message ? ` Feedback: ${outcome.message}` : ""}`,
+        output: declinedOutput(`to edit ${target.relative}`, outcome.message),
         isError: true,
       }
     }

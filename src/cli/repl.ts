@@ -7,13 +7,16 @@ import { ProviderRegistry } from "../provider/registry.js"
 import { LlmClient } from "../llm/client.js"
 import { buildTools } from "../tool/registry.js"
 import { createSkillTools } from "../tool/skill.js"
-import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex } from "../skills/loader.js"
+import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex, type Skill } from "../skills/loader.js"
+import { buildRoutes, renderRoutes, type Route } from "../skills/routing.js"
+import { searchSkills } from "../skills/search.js"
+import { loadAlwaysOn, renderAlwaysOn } from "../agent/prompt.js"
 import { McpRegistry } from "../mcp/registry.js"
 import { KNOWN_MCP_SERVERS } from "../mcp/client.js"
 import { PermissionEngine, resolvePermission } from "../agent/permission.js"
-import { buildSystemPrompt, describeProject, runAgentTurn } from "../agent/agent.js"
+import { buildSystemPrompt, describeProject, runAgentTurn, type PromptParts } from "../agent/agent.js"
 import { loadProjectInstructions } from "../agent/instructions.js"
-import { plainText } from "../agent/plain.js"
+import { createPlainStream, flushPlainStream, plainStream, plainText } from "../agent/plain.js"
 import { SessionStore, type SessionMeta } from "../session/store.js"
 import { messageText, type ChatMessage } from "../llm/client.js"
 import type { ModelInfo } from "../provider/types.js"
@@ -56,10 +59,19 @@ export interface AppDeps {
   ask: Prompter
   /** Same as ask, but does not echo what is typed. */
   askSecret?: SecretPrompter
+  /**
+   * True when the terminal already echoed what the user typed. The reply is
+   * then not printed again, so it does not appear twice.
+   */
+  echoesInput?: boolean
   /** Mutable so /model can switch models mid-session. */
   state: { model: ModelInfo; providerName: string }
   /** An existing session to reopen, when the user asked to resume one. */
   resume?: { meta: SessionMeta; messages: ChatMessage[] }
+  /** The skill library, filled in when the app starts. */
+  skills?: Skill[]
+  /** The parts of the system prompt that are not written in code. */
+  promptParts?: PromptParts
 }
 
 export async function startApp(deps: AppDeps): Promise<void> {
@@ -93,8 +105,30 @@ export async function startApp(deps: AppDeps): Promise<void> {
   const skills = discoverSkills(skillRoots)
   const groups = groupSkills(skills)
   const catalog = renderGroupIndex(groups)
+  deps.skills = skills
   if (groups.length > 0) {
     infoLine(`${skills.length} skill(s) in ${groups.length} group(s) available`)
+  }
+
+  // The always-on surface: rules, guidance and memory, kept in files.
+  const alwaysOn = loadAlwaysOn(projectRoot)
+  if (alwaysOn.files.length > 0) {
+    infoLine(`always on: ${alwaysOn.files.map((file) => file.name).join(", ")}`)
+  }
+
+  // The routing table: which skill answers which situation.
+  const routes = buildRoutes(projectRoot, skills)
+  const routeTable = renderRoutes(routes)
+  if (routes.length > 0) {
+    infoLine(`${routes.length} route(s) in the skill table`)
+  }
+
+  // The prompt, apart from the rules that are written in code.
+  deps.promptParts = {
+    catalog,
+    instructions: instructions.text,
+    routes: routeTable,
+    alwaysOn: renderAlwaysOn(alwaysOn),
   }
 
   // Start the MCP servers and fold their tools into the agent's tool set.
@@ -117,16 +151,18 @@ export async function startApp(deps: AppDeps): Promise<void> {
     if (input === "") continue
 
     if (input.startsWith("/")) {
-      const handled = await handleCommand(input, deps, session, messages, permissions, catalog)
+      const handled = await handleCommand(input, deps, session, messages, permissions, catalog, skills, routes)
       if (handled === "exit") break
       continue
     }
 
-    userLine(input)
+    if (!deps.echoesInput) {
+      userLine(input)
+    }
     sessions.append(session, { role: "user", content: input, timestamp: Date.now() })
     messages.push({ role: "user", content: input })
 
-    await runTurn(deps, session, messages, permissions, tools, catalog, instructions.text)
+    await runTurn(deps, session, messages, permissions, tools)
   }
 
   infoLine("bye")
@@ -139,8 +175,6 @@ async function runTurn(
   messages: ChatMessage[],
   permissions: PermissionEngine,
   tools: Tool[],
-  catalog: string,
-  instructions: string,
 ): Promise<void> {
   const { registry, projectRoot, ask, sessions } = deps
   const model = deps.state.model
@@ -165,6 +199,7 @@ async function runTurn(
 
   const context: ToolContext = {
     projectRoot,
+    allowedReadDirs: defaultRoots(projectRoot).map((root) => root.path),
     requestPermission: (request) =>
       resolvePermission(permissions, request, async (pending) => {
         renderPermissionRequest(pending)
@@ -185,8 +220,7 @@ async function runTurn(
       audio: deps.config.audioSettings().provider !== "none",
       vision: model.vision,
     },
-    catalog,
-    instructions,
+    deps.promptParts ?? {},
   )
   const withSystem: ChatMessage[] = [{ role: "system", content: system }, ...messages]
 
@@ -195,7 +229,16 @@ async function runTurn(
   process.once("SIGINT", onSigint)
 
   const result = await runAgentTurn(
-    { client, model, tools, projectRoot, context, signal: controller.signal, onEvent: onEvent },
+    {
+      client,
+      model,
+      tools,
+      projectRoot,
+      context,
+      skills: deps.skills,
+      signal: controller.signal,
+      onEvent: onEvent,
+    },
     withSystem,
   )
   process.off("SIGINT", onSigint)
@@ -243,11 +286,60 @@ async function runTurn(
 }
 
 let assistantStreaming = false
+let reasoningOpen = false
+let reasoningAtLineStart = false
+let reasoningLines = 0
+let reply = createPlainStream()
+
+/** How many lines of thinking are worth the screen. */
+const THINKING_LINES = 12
 
 function endAssistantStream(): void {
   if (assistantStreaming) {
+    const rest = flushPlainStream(reply)
+    if (rest) process.stdout.write(rest)
     process.stdout.write("\n")
     assistantStreaming = false
+  }
+}
+
+/** Close the thinking block, so the answer starts on a line of its own. */
+function endReasoning(): void {
+  if (reasoningOpen) {
+    process.stdout.write("\n")
+    reasoningOpen = false
+  }
+}
+
+/**
+ * Write a piece of the model's thinking.
+ *
+ * The pieces arrive in whatever order the model wrote them, so the indent
+ * belongs to the line, not to the piece. Indenting per piece would put spaces
+ * in the middle of a sentence.
+ */
+function writeReasoning(text: string): void {
+  const lines = text.split("\n")
+  for (let index = 0; index < lines.length; index++) {
+    if (index > 0) {
+      process.stdout.write("\n")
+      reasoningAtLineStart = true
+    }
+    const line = lines[index]!
+    if (line === "") continue
+    // A long train of thought is noise. The plan is in the first lines; the
+    // rest is the model working it out.
+    if (reasoningLines >= THINKING_LINES) {
+      if (reasoningLines === THINKING_LINES) {
+        process.stdout.write(`\n${style.gray("    … thinking continues")}\n`)
+        reasoningLines++
+      }
+      return
+    }
+    if (reasoningAtLineStart) process.stdout.write("    ")
+    process.stdout.write(style.gray(line))
+    reasoningAtLineStart = false
+    reasoningLines++
   }
 }
 
@@ -256,28 +348,40 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
     case "assistant_text":
       if (event.partial && event.text) {
         if (!assistantStreaming) {
+          endReasoning()
+          reply = createPlainStream()
           process.stdout.write(`\n${style.blue(symbol.arrow)} `)
           assistantStreaming = true
         }
-        process.stdout.write(event.text)
+        process.stdout.write(plainStream(event.text, reply))
       } else if (event.text) {
+        endReasoning()
         endAssistantStream()
         assistantLine(plainText(event.text))
       }
       break
     case "reasoning":
       if (event.text) {
-        for (const line of event.text.split("\n").slice(-6)) {
-          process.stdout.write(`${style.gray("  " + line)}\n`)
+        if (!reasoningOpen) {
+          endAssistantStream()
+          process.stdout.write(`\n${style.gray("  thinking")}\n`)
+          reasoningOpen = true
+          reasoningAtLineStart = true
+          reasoningLines = 0
         }
+        writeReasoning(event.text)
       }
       break
     case "tool_start":
+      endReasoning()
       endAssistantStream()
       toolLine(event.tool ?? "?", event.args)
       break
     case "tool_end":
       if (event.result) toolResultLine(event.result.output, event.result.isError === true)
+      break
+    case "notice":
+      if (event.text) warnLine(event.text)
       break
     case "error":
       break
@@ -330,6 +434,8 @@ async function handleCommand(
   messages: ChatMessage[],
   permissions: PermissionEngine,
   catalog: string,
+  skills: Skill[],
+  routes: Route[],
 ): Promise<"exit" | "handled"> {
   const [command, ...rest] = input.slice(1).split(/\s+/)
   const argument = rest.join(" ")
@@ -598,6 +704,60 @@ async function handleCommand(
         return "handled"
       }
       errorLine("usage: /audio [key <value> | voice <n> | model <n> | format <fmt> | off]")
+      return "handled"
+    }
+
+    case "skill": {
+      // The picker: search the library, or show the routing table.
+      const [action, ...rest] = rest0(argument)
+      if (!action) {
+        infoLine(`${skills.length} skill(s) available`)
+        infoLine("find one: /skill <words>")
+        infoLine("the routing table: /skill routes")
+        infoLine("read one: /skill load <name>")
+        return "handled"
+      }
+      if (action === "routes") {
+        if (routes.length === 0) {
+          infoLine("no routes. Add one to .punani/routes.md:")
+          infoLine("  when: the user wants a security review -> naga-review")
+          return "handled"
+        }
+        let source = ""
+        for (const route of routes) {
+          if (route.source !== source) {
+            source = route.source
+            process.stdout.write(`\n  ${style.gray(source === "skill" ? "from the skills themselves" : source)}\n`)
+          }
+          process.stdout.write(
+            `    ${style.gold("when")} ${route.when} ${style.gray("->")} ${style.cyan(route.skill)}\n`,
+          )
+        }
+        return "handled"
+      }
+      if (action === "load") {
+        const name = rest.join(" ").trim().toLowerCase()
+        const skill = skills.find((entry) => entry.name === name)
+        if (!skill) {
+          errorLine(`no skill called "${name}". Use /skill <words> to find one.`)
+          return "handled"
+        }
+        process.stdout.write(`\n${style.gray(skill.file)}\n\n`)
+        process.stdout.write(`${style.bold(skill.title)}\n${skill.description}\n\n`)
+        return "handled"
+      }
+      const found = searchSkills(skills, action, 10)
+      if (found.length === 0) {
+        infoLine(`no skill matched "${action}"`)
+        return "handled"
+      }
+      for (const skill of found) {
+        const triggers = skill.triggers.length > 0 ? style.gray(` [${skill.triggers[0]}]`) : ""
+        process.stdout.write(
+          `  ${style.cyan(skill.name.padEnd(34))} ${style.gray(skill.description.slice(0, 90))}${triggers}\n`,
+        )
+      }
+      infoLine("read one with: /skill load <name>")
       return "handled"
     }
 
@@ -880,7 +1040,16 @@ async function handleCommand(
     }
 
     case "context": {
-      const system = buildSystemPrompt(deps.projectRoot, {}, catalog)
+      const model = deps.state.model
+      const system = buildSystemPrompt(
+        deps.projectRoot,
+        {
+          image: deps.config.imageSettings().provider !== "none",
+          audio: deps.config.audioSettings().provider !== "none",
+          vision: model.vision,
+        },
+        deps.promptParts ?? { catalog },
+      )
       process.stdout.write(`${style.gray(system)}\n`)
       return "handled"
     }
@@ -918,6 +1087,7 @@ function printHelp(): void {
     ["/keys", "store or remove an API key, without typing it on screen"],
     ["/mcp", "add, list or remove MCP servers"],
     ["/skills", "list the skills available to the agent"],
+    ["/skill <words>", "find a skill, or read one with /skill load <name>"],
     ["/audio", "configure speech generation with ElevenLabs"],
     ["/exit", "quit"],
   ]
@@ -936,8 +1106,9 @@ function printHelp(): void {
  * prompter buffers them instead, so a scripted session works the same as an
  * interactive one.
  */
-export function createPrompter(): { ask: Prompter; askSecret: SecretPrompter; close: () => void } {
-  const rl = readline.createInterface({ input: stdin, output: stdout, terminal: stdin.isTTY === true })
+export function createPrompter(): { ask: Prompter; askSecret: SecretPrompter; close: () => void; echoesInput: boolean } {
+  const echoesInput = stdin.isTTY === true
+  const rl = readline.createInterface({ input: stdin, output: stdout, terminal: echoesInput })
   const queue: string[] = []
   let pending: ((line: string) => void) | undefined
 
@@ -998,5 +1169,6 @@ export function createPrompter(): { ask: Prompter; askSecret: SecretPrompter; cl
     ask: async (question: string) => read(question, false),
     askSecret: async (question: string) => read(question, true),
     close: () => rl.close(),
+    echoesInput,
   }
 }

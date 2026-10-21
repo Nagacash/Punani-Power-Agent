@@ -103,3 +103,17 @@ test("cost estimation and formatting", () => {
   assert.equal(value, 18)
   assert.equal(formatCost({ input: 0, output: 0, currency: "USD" }), "free")
 })
+
+test("a glob can name a set of extensions", () => {
+  const regex = globToRegex("*.{png,jpg}")
+  assert.equal(regex.test("logo.png"), true)
+  assert.equal(regex.test("photo.jpg"), true)
+  assert.equal(regex.test("notes.txt"), false)
+})
+
+test("a glob with braces still matches a path", () => {
+  const regex = globToRegex("src/*.{ts,tsx}")
+  assert.equal(regex.test("src/app.ts"), true)
+  assert.equal(regex.test("src/app.tsx"), true)
+  assert.equal(regex.test("src/app.js"), false)
+})

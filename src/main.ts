@@ -348,7 +348,7 @@ async function main(): Promise<number> {
   const registry = new ProviderRegistry(config)
   const sessions = new SessionStore()
 
-  const { ask, askSecret, close } = createPrompter()
+  const { ask, askSecret, close, echoesInput } = createPrompter()
 
   try {
     if (options.listProviders) {
@@ -548,6 +548,7 @@ async function main(): Promise<number> {
       state: { model, providerName },
       resume,
       askSecret,
+      echoesInput,
     }
 
     await startApp(deps)
