@@ -50,6 +50,10 @@ before(async () => {
         // step, so this walks the script in order: edit, then bash, then the
         // final answer.
         step++
+        // The turn makes a picture. The preview pane should pick it up.
+        if (step === 1) {
+          fs.writeFileSync(path.join(projectRoot, "made.png"), "not really a png")
+        }
         let message: any
         if (step === 1) {
           message = {
@@ -301,6 +305,11 @@ test("the browser interface runs a turn and asks for permission", async () => {
     // The ordinary edit went through without asking. The command that can
     // lose work asked.
     assert.deepEqual(approved, ["bash-destructive"])
+
+    // The picture the turn made is in the preview pane.
+    const after = await (await fetch(`${base}/api/state`, { headers: { "x-punani-token": token } })).json()
+    assert.equal(after.preview.mode, "file")
+    assert.equal(after.preview.file, "made.png")
 
     const types = events.map((event) => event.type)
     assert.ok(types.includes("diff"), "a diff should be previewed before the edit")

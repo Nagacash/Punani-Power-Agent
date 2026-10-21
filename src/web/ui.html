@@ -1519,9 +1519,14 @@
         }
         blank.hidden = true;
         frame.hidden = false;
-        const target = state.mode === "url" ? state.url : "/preview/";
+        const target =
+          state.mode === "url"
+            ? state.url
+            : state.mode === "file"
+              ? "/file?path=" + encodeURIComponent(state.file || "")
+              : "/preview/";
         if (frame.getAttribute("src") !== target) frame.setAttribute("src", target);
-        $("preview-url").value = target;
+        $("preview-url").value = state.mode === "file" ? state.file || target : target;
       }
 
       async function setPreview(mode, url) {
@@ -1700,6 +1705,7 @@
       es.onmessage = (e) => {
         const ev = JSON.parse(e.data);
         if (ev.type === "state") { applyState(ev); applyPreview(ev.preview); return; }
+        if (ev.type === "preview") { applyPreview(ev); return; }
         if (ev.type === "user") { userMsg(ev.text, { queued: ev.queued === true }); return; }
         if (ev.type === "history") { rebuildFromHistory(ev.messages); return; }
         if (ev.type === "revert") { applyRevert(ev.text || ""); return; }
