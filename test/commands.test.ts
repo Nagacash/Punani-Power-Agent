@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { test } from "node:test"
 import { initProjectFiles } from "../src/cli/commands/project.ts"
+import { projectChangedNote } from "../src/core/project.ts"
 import { collectReviewDiff, reviewPrompt } from "../src/cli/commands/review.ts"
 import { SessionStore } from "../src/session/store.ts"
 
@@ -135,4 +136,10 @@ test("the review prompt carries the diff and asks for findings", () => {
   assert.match(prompt, /Review the uncommitted changes/)
   assert.match(prompt, /the file and the line/)
   assert.match(prompt, /second/)
+})
+
+test("the agent is told when the project changes", () => {
+  const note = projectChangedNote("/tmp/other-project")
+  assert.match(note, /the project changed to \/tmp\/other-project/)
+  assert.match(note, /belong to that project/)
 })

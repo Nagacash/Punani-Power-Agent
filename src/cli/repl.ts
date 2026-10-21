@@ -48,6 +48,7 @@ import {
 } from "../ui/render.js"
 import { interpretPermissionReply, renderDiff, renderPermissionRequest } from "../ui/prompt.js"
 import { initProjectFiles } from "./commands/project.js"
+import { projectChangedNote } from "../core/project.js"
 import { collectReviewDiff, reviewPrompt } from "./commands/review.js"
 import { startSpinner, stopSpinner } from "../ui/spinner.js"
 import { login as klingLogin, whoAmI as klingWhoAmI } from "../provider/kling.js"
@@ -591,6 +592,9 @@ async function handleCommand(
       deps.state.session.projectRoot = target
       sessions.save(deps.state.session)
       deps.state.tools = loadProject(deps, target)
+      // The conversation carries over, so the agent has to be told that the
+      // ground moved under it.
+      deps.state.messages.push({ role: "user", content: projectChangedNote(target) })
       successLine(`moved to ${target}`)
       return "handled"
     }

@@ -131,10 +131,18 @@ export class PreviewServer extends EventEmitter {
     super()
   }
 
-  /** Point the preview at a different project. */
+  /**
+   * Point the preview at a different project.
+   *
+   * The new project has its own page, and a file from the old one is not
+   * there to show, so the pane goes back to the project.
+   */
   setProject(root: string): void {
     this.projectRoot = root
+    this.file = ""
+    if (this.mode === "file") this.mode = "static"
     this.restartWatcher()
+    this.emit("state", this.state())
   }
 
   /** Turn the preview on, in static, url or file mode. */

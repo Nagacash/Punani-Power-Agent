@@ -52,6 +52,20 @@ test("the noise in a project is not mistaken for media", () => {
   assert.equal(preview.newestMedia(before), undefined)
 })
 
+test("a new project shows its own page, not the file of the old one", (t) => {
+  const root = project()
+  const preview = new PreviewServer(root)
+  t.after(() => preview.disable())
+
+  preview.showFile("public/media/clip.mp4")
+  assert.equal(preview.state().mode, "file")
+
+  preview.setProject(project())
+  const state = preview.state()
+  assert.equal(state.mode, "static", "the new project has its own page")
+  assert.equal(state.file, "")
+})
+
 test("the pane can be pointed at a file", (t) => {
   const root = project()
   const preview = new PreviewServer(root)
