@@ -435,6 +435,25 @@ Every file edit shows a diff before it is written. Commands that delete or
 overwrite data (`rm -rf`, `git reset --hard`, `dd`, piping a download into a
 shell) are flagged as destructive in the prompt.
 
+## Pictures
+
+A picture can be pasted into the chat, dropped on it, or picked with the
+button next to the composer. It goes to the model with the message, so the
+agent can look at what you sent instead of guessing what it looks like.
+
+```
+📎  what is wrong with this screenshot?
+```
+
+The picture has to be an image of 4 MB or less, and a message can carry
+six. The transcript keeps a note that a picture came with the message, not
+the picture itself, so the session file stays small. A model that cannot
+see pictures is told so rather than being sent one.
+
+The terminal cannot take a pasted picture, but the agent can read one from
+the project: ask it to look at `docs/screenshot.png` and the picture rides
+along with the tool result.
+
 ## Tools
 
 | Tool | Purpose |

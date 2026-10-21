@@ -189,10 +189,12 @@ test("a request body has a size", async () => {
     const huge = "x".repeat(2 * 1024 * 1024)
     let status = 0
     try {
-      const response = await fetch(`${base}/api/message`, {
+      // A route that takes no body. The message route is allowed a bigger
+      // one, because a message can carry pictures.
+      const response = await fetch(`${base}/api/permission`, {
         method: "POST",
         headers: { "x-punani-token": token, "content-type": "application/json" },
-        body: JSON.stringify({ text: huge }),
+        body: JSON.stringify({ id: huge }),
       })
       status = response.status
     } catch {
