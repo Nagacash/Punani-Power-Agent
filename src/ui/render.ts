@@ -1,4 +1,5 @@
 import { style, symbol, truncate, visibleWidth } from "./theme.js"
+import { logoLines } from "./logo.js"
 import type { ModelInfo } from "../provider/types.js"
 import { formatCost } from "../provider/types.js"
 
@@ -9,11 +10,29 @@ import { formatCost } from "../provider/types.js"
  * readable when piped to a file.
  */
 
+/**
+ * The opening mark.
+ *
+ * The name sits beside the logo, and the logo is the mark coiled: a spiral of
+ * gold, because a terminal cannot show a picture and a word alone does not
+ * look like anything.
+ */
 export function banner(title: string, subtitle: string): void {
-  const line = "═".repeat(Math.max(title.length + subtitle.length + 4, 46))
-  process.stdout.write(`\n${style.gold(line)}\n`)
-  process.stdout.write(` ${style.bold(style.white(title))} ${style.gray(subtitle)}\n`)
-  process.stdout.write(`${style.gold(line)}\n\n`)
+  const mark = logoLines()
+  const text = [style.bold(style.white(title)), style.gray(subtitle)]
+  const top = Math.max(0, Math.floor((mark.length - text.length) / 2))
+  const margin = "  "
+  const column = mark[0]?.length ?? 17
+
+  process.stdout.write("\n")
+  for (let row = 0; row < mark.length; row++) {
+    const line = mark[row] ?? ""
+    const beside = row === top ? text[0] : row === top + 1 ? text[1] : undefined
+    const gap = beside ? " ".repeat(Math.max(3, column + 3 - line.length)) : ""
+    process.stdout.write(`${margin}${style.gold(line)}${gap}${beside ?? ""}\n`)
+  }
+  const rule = margin + " ".repeat(column + 3) + style.gold("═".repeat(Math.max(title.length, 30)))
+  process.stdout.write(`${rule}\n\n`)
 }
 
 export function userLine(text: string): void {
