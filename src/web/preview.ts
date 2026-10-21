@@ -47,6 +47,9 @@ const MIME: Record<string, string> = {
   ".wasm": "application/wasm",
 }
 
+/** How many entries the media scan will look at before it gives up. */
+const MAX_MEDIA_ENTRIES = 20_000
+
 /** The files the pane can show: pictures, clips and sound. */
 const MEDIA: Record<string, "image" | "video" | "audio"> = {
   ".png": "image",
@@ -174,8 +177,11 @@ export class PreviewServer extends EventEmitter {
    */
   newestMedia(since: number): { path: string; kind: "image" | "video" | "audio" } | undefined {
     let newest: { path: string; kind: "image" | "video" | "audio"; at: number } | undefined
+    // The scan runs on the server's thread, so it is bounded: a project with a
+    // huge media folder must not hold the app up.
+    let visited = 0
     const walk = (dir: string, depth: number): void => {
-      if (depth > 6) return
+      if (depth > 6 || visited > MAX_MEDIA_ENTRIES) return
       let entries: fs.Dirent[]
       try {
         entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -183,6 +189,8 @@ export class PreviewServer extends EventEmitter {
         return
       }
       for (const entry of entries) {
+        if (visited > MAX_MEDIA_ENTRIES) return
+        visited++
         if (entry.name.startsWith(".") || this.ignore.has(entry.name)) continue
         const full = path.join(dir, entry.name)
         if (entry.isDirectory()) {

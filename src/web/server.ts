@@ -214,6 +214,8 @@ export class WebServer {
   private abort?: AbortController
   /** Follow-up prompts sent while a turn is still running. */
   private readonly messageQueue: { text: string; images: AttachedImage[] }[] = []
+  /** The file the preview was last pointed at. */
+  private lastMedia = ""
   /** After abort, drop the in-flight user message and partial reply. */
   private revertAfterAbort = false
   /** Invalidates stale forced-stop timers when a new run or abort starts. */
@@ -1447,8 +1449,11 @@ export class WebServer {
    * which tool made it: the picture tool, or a skill that rendered a clip.
    */
   private showNewMedia(started: number): void {
-    const found = this.preview.newestMedia(started - 2000)
+    const found = this.preview.newestMedia(started - 250)
     if (!found) return
+    // The same file again is not news.
+    if (found.path === this.lastMedia) return
+    this.lastMedia = found.path
     this.preview.showFile(found.path)
     this.hub.send({
       type: "notice",
