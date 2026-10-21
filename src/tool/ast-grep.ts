@@ -1,0 +1,176 @@
+import { spawn } from "node:child_process"
+import fs from "node:fs"
+import path from "node:path"
+import { ToolError, loadIgnoreRules, resolveInProject } from "./fsutil.js"
+import { walkFiles } from "./fs-tools.js"
+import type { Tool, ToolContext, ToolResult } from "./types.js"
+
+/**
+ * Structural search.
+ *
+ * A text search finds the word. A structural search finds the thing: every
+ * call to a function, every method on a type, every place a pattern appears
+ * in the syntax of the language.
+ *
+ * It needs the `ast-grep` binary. When it is not there the tool is not
+ * offered at all, and the agent uses the text search it already has.
+ */
+
+const CANDIDATES = ["ast-grep", "sg"]
+
+/** True when the binary is on the path. */
+export function isAstGrepAvailable(): boolean {
+  return CANDIDATES.some((binary) => findOnPath(binary) !== undefined)
+}
+
+/** Where a binary is, if it is there at all. */
+function findOnPath(binary: string): string | undefined {
+  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
+  for (const dir of dirs) {
+    const candidate = path.join(dir, binary)
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK)
+      return candidate
+    } catch {
+      /* keep looking */
+    }
+  }
+  return undefined
+}
+
+const MAX_MATCHES = 100
+
+export const astGrepTool: Tool = {
+  name: "astgrep",
+  description:
+    "Search the code by its structure rather than its text. Give a pattern in the " +
+    "language's own syntax, for example `console.log($A)` or `fn $NAME($$$) -> $RET` " +
+    "or `class $C { $$$ }`, and it finds every place that shape appears, with the " +
+    "file and the line. Use it when a text search would match too much or too little.",
+  permissionAction: "search",
+  parameters: {
+    type: "object",
+    properties: {
+      pattern: { type: "string", description: "The pattern, in the language's own syntax." },
+      language: { type: "string", description: "Optional language, e.g. typescript, python, rust." },
+      path: { type: "string", description: "Optional directory to restrict the search to." },
+      limit: { type: "number", description: `Maximum number of matches (default ${MAX_MATCHES}).` },
+    },
+    required: ["pattern"],
+  },
+  async run(args: any, context: ToolContext): Promise<ToolResult> {
+    const pattern = String(args.pattern ?? "").trim()
+    if (!pattern) throw new ToolError("a pattern is required")
+
+    const outcome = await context.requestPermission({
+      action: "search",
+      resource: `astgrep:${pattern}`,
+      summary: `Search the code for ${pattern}`,
+      alwaysPatterns: [`astgrep:${pattern}`],
+    })
+    if (!outcome.granted) {
+      return { output: `The user declined the structural search.${outcome.message ? ` Feedback: ${outcome.message}` : ""}`, isError: true }
+    }
+
+    const scope = args.path ? resolveInProject(context.projectRoot, String(args.path)) : undefined
+    if (scope?.outside) {
+      throw new ToolError(`path "${args.path}" is outside the project directory.`)
+    }
+
+    const binary = CANDIDATES.find((candidate) => findOnPath(candidate) !== undefined)
+    if (!binary) {
+      return {
+        output:
+          "ast-grep is not installed, so the structural search did not run. " +
+          "Use grep for a text search, or install ast-grep to unlock this one.",
+        isError: true,
+      }
+    }
+
+    const limit = Math.max(1, Math.min(500, Number(args.limit ?? MAX_MATCHES)))
+    const files = candidateFiles(context, scope?.absolute, args.language ? String(args.language) : undefined)
+    if (files.length === 0) {
+      return { output: "no files to search" }
+    }
+
+    const matches = await runAstGrep(binary, pattern, files, limit, context)
+    if (matches.length === 0) {
+      return { output: `no match for ${pattern}` }
+    }
+    return { output: matches.join("\n"), meta: { pattern, count: matches.length } }
+  },
+}
+
+/** The files worth searching: inside the project, not ignored, not a binary. */
+function candidateFiles(context: ToolContext, scope: string | undefined, language: string | undefined): string[] {
+  const ignores = loadIgnoreRules(context.projectRoot)
+  const extensions: Record<string, string[]> = {
+    typescript: [".ts", ".tsx", ".mts", ".cts"],
+    tsx: [".tsx"],
+    javascript: [".js", ".jsx", ".mjs", ".cjs"],
+    python: [".py"],
+    rust: [".rs"],
+    go: [".go"],
+    java: [".java"],
+    ruby: [".rb"],
+    php: [".php"],
+    c: [".c", ".h"],
+    cpp: [".cpp", ".cc", ".hpp"],
+    csharp: [".cs"],
+  }
+  const wanted = language ? extensions[language.toLowerCase()] : undefined
+
+  const files: string[] = []
+  for (const file of walkFiles(context.projectRoot, scope, undefined)) {
+    const relative = path.relative(context.projectRoot, file).split(path.sep).join("/")
+    if (ignores.ignores(relative, false)) continue
+    if (wanted && !wanted.some((extension) => relative.endsWith(extension))) continue
+    files.push(file)
+  }
+  return files.slice(0, 2_000)
+}
+
+async function runAstGrep(
+  binary: string,
+  pattern: string,
+  files: string[],
+  limit: number,
+  context: ToolContext,
+): Promise<string[]> {
+  const args = ["run", "--pattern", pattern, "--json=compact"]
+  for (const file of files) args.push(file)
+
+  return await new Promise<string[]>((resolve) => {
+    const child = spawn(binary, args, {
+      cwd: context.projectRoot,
+      env: { ...process.env, NO_COLOR: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+    const chunks: Buffer[] = []
+    let bytes = 0
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (bytes > 512 * 1024) return
+      bytes += chunk.length
+      chunks.push(chunk)
+    })
+    child.on("error", () => resolve([]))
+    child.on("close", () => {
+      const lines = Buffer.concat(chunks).toString("utf8").split("\n").filter((line) => line.trim())
+      const out: string[] = []
+      for (const line of lines) {
+        if (out.length >= limit) break
+        try {
+          const match = JSON.parse(line)
+          const file = match.file ?? ""
+          const relative = path.relative(context.projectRoot, path.resolve(context.projectRoot, file)).split(path.sep).join("/")
+          const text = (match.text ?? "").split("\n")[0]!.trim().slice(0, 160)
+          const line0 = match.line ?? 0
+          out.push(`${relative}:${line0}: ${text}`)
+        } catch {
+          /* not a match line */
+        }
+      }
+      resolve(out)
+    })
+  })
+}

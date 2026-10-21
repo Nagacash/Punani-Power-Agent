@@ -4,6 +4,7 @@ import { createImageTool, type ImageSettings } from "./image.js"
 import { createAudioTool, type AudioSettings } from "./audio.js"
 import { editTool, writeTool } from "./edit-tools.js"
 import { globTool, grepTool, readTool } from "./fs-tools.js"
+import { astGrepTool, isAstGrepAvailable } from "./ast-grep.js"
 import type { Tool } from "./types.js"
 
 /**
@@ -18,6 +19,9 @@ export function buildTools(
   mcp: Tool[] = [],
 ): Tool[] {
   const tools: Tool[] = [readTool, writeTool, editTool, globTool, grepTool, bashTool, devTool]
+  // The structural search is only offered when the binary is there, so the
+  // model is never told about a tool that cannot run.
+  if (isAstGrepAvailable()) tools.push(astGrepTool)
   if (image && image.provider && image.provider !== "none") tools.push(createImageTool(image))
   if (audio && audio.provider && audio.provider !== "none") tools.push(createAudioTool(audio))
   tools.push(...mcp)
@@ -25,6 +29,7 @@ export function buildTools(
 }
 
 export const BUILTIN_TOOLS: Tool[] = [readTool, writeTool, editTool, globTool, grepTool, bashTool, devTool]
+if (isAstGrepAvailable()) BUILTIN_TOOLS.push(astGrepTool)
 
 export function toolsByName(): Map<string, Tool> {
   return new Map(BUILTIN_TOOLS.map((tool) => [tool.name, tool]))
