@@ -179,7 +179,9 @@ export const devTool: Tool = {
     const shell = process.env.PUNANI_SHELL || process.env.SHELL || "/bin/sh"
     const child = spawn(shell, ["-c", command], {
       cwd: workdir.absolute,
-      env: { ...process.env, PUNANI_PROJECT_ROOT: context.projectRoot },
+      // The dev server serves the project. It belongs on the loopback
+      // address, whatever the command says.
+      env: { ...process.env, PUNANI_PROJECT_ROOT: context.projectRoot, HOST: "127.0.0.1" },
       stdio: ["ignore", "pipe", "pipe"],
       // Its own process group, so it is not killed by signals meant for us.
       detached: true,

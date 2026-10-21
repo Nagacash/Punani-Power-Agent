@@ -87,6 +87,8 @@ export interface AppDeps {
     messages: ChatMessage[]
     /** The tools the agent may use. Rebuilt when the project moves. */
     tools: Tool[]
+    /** Stops the turn that is running, when there is one. */
+    abort?: () => void
   }
   /** The MCP tools, so the tool set can be rebuilt when the project moves. */
   mcpTools?: Tool[]
@@ -98,6 +100,13 @@ export interface AppDeps {
   skills?: Skill[]
   /** The parts of the system prompt that are not written in code. */
   promptParts?: PromptParts
+  /**
+   * Registers the handler for Ctrl+C.
+   *
+   * The prompt is in raw mode while the app reads, so a key press does not
+   * raise a signal. The handler is how a turn gets stopped.
+   */
+  setInterruptHandler?: (handler: (() => void) | undefined) => void
 }
 
 export async function startApp(deps: AppDeps): Promise<void> {
@@ -120,6 +129,12 @@ export async function startApp(deps: AppDeps): Promise<void> {
   }
   infoLine("Type /help for commands, /exit to quit.")
 
+  // Ctrl+C stops the turn that is running. With no turn running there is
+  // nothing to stop, and the prompt takes the interrupt as its answer.
+  deps.setInterruptHandler?.(() => {
+    deps.state.abort?.()
+  })
+
   // Start the MCP servers and fold their tools into the agent's tool set.
   const mcp = new McpRegistry(config.mcpServers())
   deps.mcpTools = await mcp.start()
@@ -134,6 +149,8 @@ export async function startApp(deps: AppDeps): Promise<void> {
     try {
       line = await ask(`${style.green("›")} `)
     } catch {
+      // The user interrupted, or the input ended. Either way, the session is
+      // over.
       break
     }
     const input = line.trim()
@@ -280,7 +297,8 @@ async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<vo
 
   const controller = new AbortController()
   const onSigint = (): void => controller.abort()
-  process.once("SIGINT", onSigint)
+  process.on("SIGINT", onSigint)
+  deps.state.abort = onSigint
 
   startSpinner("thinking")
   let result: AgentTurnResult
@@ -303,6 +321,7 @@ async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<vo
   } finally {
     stopSpinner()
     process.off("SIGINT", onSigint)
+    deps.state.abort = undefined
   }
 
   if (result.error) {
@@ -1313,9 +1332,24 @@ export interface PrompterOptions {
   projectRoot?: string
 }
 
+/** Thrown when the user interrupts with Ctrl+C. */
+export class Interrupted extends Error {
+  constructor() {
+    super("interrupted")
+    this.name = "Interrupted"
+  }
+}
+
 export function createPrompter(
   options: PrompterOptions = {},
-): { ask: Prompter; askSecret: SecretPrompter; close: () => void; echoesInput: boolean } {
+): {
+  ask: Prompter
+  askSecret: SecretPrompter
+  close: () => void
+  echoesInput: boolean
+  /** Registers the handler for Ctrl+C. */
+  onInterrupt: (handler: (() => void) | undefined) => void
+} {
   const echoesInput = stdin.isTTY === true
   const rl = readline.createInterface({
     input: stdin,
@@ -1326,26 +1360,34 @@ export function createPrompter(
     completer: makeCompleter(options),
   })
   const queue: string[] = []
-  let pending: ((line: string) => void) | undefined
+  let pending: { resolve: (line: string) => void; reject: (error: Error) => void } | undefined
+  let interrupt: (() => void) | undefined
 
+  // The terminal is in raw mode while the app is reading, so Ctrl+C does not
+  // raise a signal: it arrives as a key press. The prompt has to hear it.
   rl.on("line", (line) => {
     if (pending) {
-      const resolve = pending
+      const waiting = pending
       pending = undefined
-      resolve(line)
+      waiting.resolve(line)
       return
     }
     queue.push(line)
   })
 
+  const cancel = (): void => {
+    const waiting = pending
+    pending = undefined
+    waiting?.reject(new Interrupted())
+  }
+
   rl.on("SIGINT", () => {
     stdout.write("^C\n")
-    if (pending) {
-      const resolve = pending
-      pending = undefined
-      resolve("")
-    }
+    interrupt?.()
+    cancel()
   })
+
+  rl.on("close", () => cancel())
 
   // readline's promise interface does not expose the output stream, but the
   // underlying interface does. Keep our own handle on it so a secret can be
@@ -1364,8 +1406,8 @@ export function createPrompter(
       io.output = muted
       stdout.write(question)
       try {
-        const answer = await new Promise<string>((resolve) => {
-          pending = resolve
+        const answer = await new Promise<string>((resolve, reject) => {
+          pending = { resolve, reject }
         })
         return answer
       } finally {
@@ -1376,8 +1418,8 @@ export function createPrompter(
     stdout.write(question)
     const buffered = queue.shift()
     if (buffered !== undefined) return buffered
-    return await new Promise<string>((resolve) => {
-      pending = resolve
+    return await new Promise<string>((resolve, reject) => {
+      pending = { resolve, reject }
     })
   }
 
@@ -1386,5 +1428,8 @@ export function createPrompter(
     askSecret: async (question: string) => read(question, true),
     close: () => rl.close(),
     echoesInput,
+    onInterrupt: (handler: (() => void) | undefined) => {
+      interrupt = handler
+    },
   }
 }

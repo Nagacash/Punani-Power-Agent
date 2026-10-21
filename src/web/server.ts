@@ -121,6 +121,16 @@ function isLoopbackAddress(address: string | undefined): boolean {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1"
 }
 
+/**
+ * Escape a string for an AppleScript literal.
+ *
+ * A backslash has to be escaped before a quote is, or the quote does not
+ * close anything and the rest of the path is code.
+ */
+export function escapeAppleScript(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
 /** Is this a loopback host we should mirror onto the other family? */
 function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "::1" || host === "localhost"
@@ -423,12 +433,12 @@ export class WebServer {
         JSON.stringify({
           app: "punani-powerd",
           version: "1.0.0",
-          pid: process.pid,
-          project: this.projectRoot,
           // The token is the sign-in credential. Hand it over only to a
           // request that came from this machine, so a second local instance
           // can tell the user how to get in without exposing it to the
-          // network when the server is bound wider.
+          // network when the server is bound wider. The path of the project
+          // and the process id say more about the machine than a caller
+          // needs, so they stay out of it.
           ...(isLoopbackAddress(request.socket.remoteAddress) ? { token: this.token } : {}),
         }),
       )
@@ -521,8 +531,11 @@ export class WebServer {
   private startFolderPicker(startAt?: string): string {
     const id = `pick_${++this.pickerCounter}`
     const prompt = "Select the project folder for Punani powerd"
+    // The path goes into an AppleScript string literal. A backslash has to
+    // be escaped before a quote is, or the quote does not close anything.
+    const escaped = startAt ? startAt.replace(/\\/g, "\\\\").replace(/"/g, '\\"') : ""
     const script = startAt
-      ? `POSIX path of (choose folder with prompt "${prompt}" default location POSIX file "${startAt.replace(/"/g, '\\"')}")`
+      ? `POSIX path of (choose folder with prompt "${prompt}" default location POSIX file "${escaped}")`
       : `POSIX path of (choose folder with prompt "${prompt}")`
 
     const child = spawn("osascript", ["-e", script], { stdio: ["ignore", "pipe", "pipe"] })
@@ -569,8 +582,10 @@ export class WebServer {
       response.writeHead(200, {
         "content-type": resolved.type,
         "cache-control": "no-store",
-        // The preview must be able to load its own assets.
-        "access-control-allow-origin": "*",
+        // A page from the project is not the app. The sandbox gives it its
+        // own origin, so a page the model wrote cannot use the session the
+        // app holds, and a site cannot read the project through it.
+        "content-security-policy": "sandbox allow-scripts allow-forms allow-popups",
       })
       response.end(bytes)
     } catch {
@@ -752,6 +767,28 @@ export class WebServer {
   }
 
   /**
+   * The real path on disk.
+   *
+   * A file that is not there yet has no real path, so the directory that
+   * holds it is resolved and the missing parts are put back.
+   */
+  private realPath(target: string): string {
+    let current = target
+    const tail: string[] = []
+    for (;;) {
+      try {
+        const real = fs.realpathSync(current)
+        return tail.length ? path.join(real, ...tail) : real
+      } catch {
+        const parent = path.dirname(current)
+        if (parent === current) return target
+        tail.unshift(path.basename(current))
+        current = parent
+      }
+    }
+  }
+
+  /**
    * Serve a file from the project so generated images can be shown inline.
    * The path is resolved and checked to be inside the project root, so this
    * cannot be used to read files elsewhere on the machine.
@@ -761,6 +798,14 @@ export class WebServer {
     const target = path.resolve(this.projectRoot, requested)
     const relative = path.relative(this.projectRoot, target)
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      response.writeHead(403, { "content-type": "text/plain" })
+      response.end("forbidden")
+      return
+    }
+    // A link inside the project that points out of it is not inside it.
+    const realRoot = this.realPath(this.projectRoot)
+    const realTarget = this.realPath(target)
+    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
       response.writeHead(403, { "content-type": "text/plain" })
       response.end("forbidden")
       return
@@ -863,9 +908,16 @@ export class WebServer {
    * Returns null when allowed, or the status code to refuse with.
    */
   private denied(request: http.IncomingMessage, url: URL): number | null {
+    // The address the client used has to be one of ours. A rebound name
+    // points at this server from a page on the internet, and that page
+    // passes every other check.
+    if (!this.isOwnHost(request.headers.host ?? "")) return 403
+
     const header = request.headers["x-punani-token"]
     const cookie = parseCookie(request.headers.cookie ?? "")["punani"]
-    const query = url.searchParams.get("t")
+    // The token in the query string is only for the sign-in exchange. On
+    // every other path it would end up in history and in referrers.
+    const query = url.pathname === "/" || url.pathname === "/session" ? url.searchParams.get("t") : null
     const supplied = (Array.isArray(header) ? header[0] : header) ?? cookie ?? query
     if (supplied !== this.token) return 401
 
@@ -887,6 +939,30 @@ export class WebServer {
       if (originHost !== host) return 403
     }
     return null
+  }
+
+  /**
+   * True when the address in the Host header is this server.
+   *
+   * A browser that resolved a name to this address can send any Host it
+   * likes, so the name is checked against the addresses the server actually
+   * answers on, not against the socket.
+   */
+  private isOwnHost(host: string): boolean {
+    // A server the user bound to the network is open on purpose, and a task
+    // window on another device reaches it by its address on the network. The
+    // check is for the default, where the loopback address is the one thing
+    // that keeps a page on the internet out.
+    if (!isLoopback(this.options.host)) return true
+    if (!host) return false
+    const name = host.trim().toLowerCase()
+    // The port the server actually answers on, which is not the one that was
+    // asked for when the port was left to the system.
+    const port = String(this.port)
+    for (const candidate of ["127.0.0.1", "localhost", "[::1]"]) {
+      if (name === candidate || name === `${candidate}:${port}`) return true
+    }
+    return false
   }
 
   private sendHtml(response: http.ServerResponse): void {
@@ -1501,9 +1577,20 @@ function json(response: http.ServerResponse, payload: unknown, status = 200): vo
   response.end(JSON.stringify(payload))
 }
 
+/** A request body is small. Anything larger is not a request we want. */
+const MAX_BODY_BYTES = 1024 * 1024
+
 async function readJson(request: http.IncomingMessage): Promise<any> {
   const chunks: Buffer[] = []
-  for await (const chunk of request) chunks.push(chunk as Buffer)
+  let size = 0
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length
+    if (size > MAX_BODY_BYTES) {
+      request.destroy()
+      return {}
+    }
+    chunks.push(chunk as Buffer)
+  }
   if (chunks.length === 0) return {}
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"))

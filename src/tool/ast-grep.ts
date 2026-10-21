@@ -202,6 +202,8 @@ async function runAstGrep(
   context: ToolContext,
 ): Promise<string[]> {
   const args = ["run", "--pattern", pattern, "--json=compact"]
+  // Everything after this is a file name, even one that starts with a dash.
+  args.push("--")
   for (const file of files) args.push(file)
 
   return await new Promise<string[]>((resolve) => {

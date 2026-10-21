@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { paths } from "../core/paths.js"
+import { xmlEscape } from "./loader.js"
 import type { Skill } from "./loader.js"
 
 /**
@@ -148,6 +149,11 @@ export function buildRoutes(
   return routes
 }
 
+/** One line, so a route cannot end the line it is on. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim()
+}
+
 /**
  * The routing table, as text for the system prompt.
  *
@@ -158,8 +164,12 @@ export function renderRoutes(routes: Route[], limit = 60): string {
   if (routes.length === 0) return ""
   const lines = ["Routing. Load one skill, and only one:"]
   for (const route of routes.slice(0, limit)) {
-    const not = route.antiTriggers.length > 0 ? ` Not for ${route.antiTriggers.join(", ")}.` : ""
-    lines.push(`- When ${route.when}, load the \`${route.skill}\` skill.${not}`)
+    // A route is text from a skill's own frontmatter. It goes into the
+    // system prompt, so it is escaped and put on one line: a skill cannot
+    // write a line of its own into the prompt.
+    const not =
+      route.antiTriggers.length > 0 ? ` Not for ${xmlEscape(route.antiTriggers.join(", "))}.` : ""
+    lines.push(`- When ${xmlEscape(oneLine(route.when))}, load the \`${xmlEscape(route.skill)}\` skill.${not}`)
   }
   if (routes.length > limit) {
     lines.push(`- ${routes.length - limit} more route(s) are not shown. Use skill_search to find them.`)

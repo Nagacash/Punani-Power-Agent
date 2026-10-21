@@ -129,16 +129,20 @@ export function createSkillTools(groups: SkillGroup[], skills: Skill[]): Tool[] 
         throw new ToolError(`could not read the ${skill.name} skill: ${(error as Error).message}`)
       }
 
+      // Every field here comes from the skill's own frontmatter, which is
+      // text on disk like the body. It is escaped the same way, so a skill
+      // cannot close the envelope or write a line of its own into the
+      // prompt.
       const header = [
         `<skill_content name="${xmlEscape(skill.name)}">`,
-        `Directory: ${skill.dir}`,
+        `Directory: ${xmlEscape(skill.dir)}`,
         skill.allowedTools.length > 0
-          ? `These tools are pre-approved for this turn only: ${skill.allowedTools.join(", ")}.`
+          ? `These tools are pre-approved for this turn only: ${xmlEscape(skill.allowedTools.join(", "))}.`
           : "",
-        skill.triggers.length > 0 ? `Use it when: ${skill.triggers.join("; ")}.` : "",
-        skill.antiTriggers.length > 0 ? `Not for: ${skill.antiTriggers.join("; ")}.` : "",
+        skill.triggers.length > 0 ? `Use it when: ${xmlEscape(skill.triggers.join("; "))}.` : "",
+        skill.antiTriggers.length > 0 ? `Not for: ${xmlEscape(skill.antiTriggers.join("; "))}.` : "",
         skill.requiredReceipts.length > 0
-          ? `Receipts: the turn must use ${skill.requiredReceipts.join(", ")} before it is done.`
+          ? `Receipts: the turn must use ${xmlEscape(skill.requiredReceipts.join(", "))} before it is done.`
           : "",
         "",
       ]
