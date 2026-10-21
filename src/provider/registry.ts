@@ -229,16 +229,17 @@ export class ProviderRegistry {
     }
 
     const candidates: ModelInfo[] = []
-    for (const provider of this.providers()) {
-      if (!usable.has(provider.id)) continue
-      let models: ModelInfo[]
-      try {
-        models = (await this.catalog(provider)).models.map((model) => this.applyOverride(model))
-      } catch {
-        // The provider is down. Its seeded models are not an option.
-        continue
-      }
-      candidates.push(...models)
+    // The catalogs are fetched in parallel. This runs on the throttled path,
+    // and a provider that is down must not add its timeout to every other
+    // provider's wait.
+    const fetched = await Promise.allSettled(
+      this.providers()
+        .filter((provider) => usable.has(provider.id))
+        .map(async (provider) => (await this.catalog(provider)).models.map((model) => this.applyOverride(model))),
+    )
+    for (const result of fetched) {
+      // A provider that cannot be reached cannot answer, so it is left out.
+      if (result.status === "fulfilled") candidates.push(...result.value)
     }
 
     const open = candidates.filter(
