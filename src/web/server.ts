@@ -33,6 +33,7 @@ import { listWebInstances, nextTaskLabel, registerWebInstance, unregisterWebInst
 import { spawnTaskWindow } from "./spawn-task.js"
 import { Settings } from "./settings.js"
 import { log } from "../core/logger.js"
+import { projectChangedNote } from "../core/project.js"
 import { version } from "../core/version.js"
 import { redactError } from "../core/redact.js"
 
@@ -765,6 +766,12 @@ export class WebServer {
     // A different project has its own skills and its own instructions.
     this.rescanSkills(target)
     this.session = this.sessions.create(target, this.model?.id, this.model?.providerID)
+    // The conversation carries over, so the agent has to be told that the
+    // ground moved under it. It goes into the transcript too, so a session
+    // that is resumed later still carries the boundary.
+    const note = projectChangedNote(target)
+    this.messages.push({ role: "user", content: note })
+    this.sessions.append(this.session, { role: "user", content: note, timestamp: Date.now() })
     this.hub.send({ type: "state", ...this.snapshot() })
     this.hub.send({ type: "notice", text: `project changed to ${target}` })
     return { ok: true, project: target }
