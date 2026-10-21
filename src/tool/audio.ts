@@ -1,7 +1,7 @@
 import path from "node:path"
 import { ToolError, ensureInsideProject } from "./fsutil.js"
 import { extensionFor, synthesize } from "../provider/elevenlabs.js"
-import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
+import { declinedResult, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 /**
  * Speech generation.
@@ -83,10 +83,7 @@ export function createAudioTool(settings: AudioSettings): Tool {
         alwaysPatterns: [],
       })
       if (!outcome.granted) {
-        return {
-          output: declinedOutput("the audio generation", outcome.message),
-          isError: true,
-        }
+        return declinedResult("the audio generation", outcome)
       }
 
       const result = await synthesize(settings.apiKey ?? "", {

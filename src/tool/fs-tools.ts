@@ -20,7 +20,7 @@ const IMAGE_TYPES: Record<string, string> = {
 
 /** Largest image the read tool will hand to the model. */
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
-import { declinedOutput, type Tool, type ToolResult } from "./types.js"
+import { declinedOutput, declinedResult, type Tool, type ToolResult } from "./types.js"
 
 const MAX_READ_BYTES = 2 * 1024 * 1024
 const DEFAULT_LIMIT = 2000
@@ -53,10 +53,7 @@ export const readTool: Tool = {
       alwaysPatterns: [resource],
     })
     if (!outcome.granted) {
-      return {
-        output: declinedOutput(`to read ${target.relative}`, outcome.message),
-        isError: true,
-      }
+      return declinedResult(`to read ${target.relative}`, outcome)
     }
     const stat = fs.statSync(target.absolute)
     if (stat.isDirectory()) {
@@ -123,7 +120,7 @@ export const globTool: Tool = {
       alwaysPatterns: [`glob:${pattern}`],
     })
     if (!outcome.granted) {
-      return { output: declinedOutput("the file search", outcome.message), isError: true }
+      return declinedResult("the file search", outcome)
     }
     const results = await findByGlob(context.projectRoot, pattern, limit)
     if (results.length === 0) return { output: `No files matched ${pattern}` }
@@ -167,7 +164,7 @@ export const grepTool: Tool = {
       alwaysPatterns: [`grep:${pattern}`],
     })
     if (!outcome.granted) {
-      return { output: declinedOutput("the search", outcome.message), isError: true }
+      return declinedResult("the search", outcome)
     }
 
     const matches: string[] = []

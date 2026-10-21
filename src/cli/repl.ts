@@ -272,10 +272,20 @@ async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<vo
         // The prompt owns the screen while it is up.
         stopSpinner()
         renderPermissionRequest(pending)
-        const reply = await ask(`${style.yellow("?")} `)
-        stdout.write("\n")
-        const decision = interpretPermissionReply(reply, pending)
-        startSpinner("working")
+        let decision
+        try {
+          const reply = await ask(`${style.yellow("?")} `)
+          stdout.write("\n")
+          decision = interpretPermissionReply(reply, pending)
+        } catch {
+          // The user interrupted the prompt. Nobody answered, so the turn
+          // ends here rather than arguing with a refusal that was never
+          // given.
+          stdout.write("\n")
+          decision = { granted: false, unanswered: true }
+        }
+        // The spinner only comes back if the work is going to continue.
+        if (decision.granted) startSpinner("working")
         return decision
       }),
     notify: (message) => infoLine(message),
@@ -328,6 +338,10 @@ async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<vo
     await reportError(result.error, deps, deps.state.model)
   } else if (result.stoppedReason === "max_steps") {
     warnLine(`stopped after ${DEFAULT_MAX_STEPS} tool steps to stay within budget`)
+  } else if (result.stoppedReason === "declined") {
+    warnLine("stopped: the same request was declined, so it was not asked for again")
+  } else if (result.stoppedReason === "aborted") {
+    infoLine("stopped")
   }
 
   // The messages of the turn, each with the usage of the call that made it.
@@ -452,7 +466,8 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
     case "tool_end":
       stopSpinner()
       if (event.result) toolResultLine(event.result.output, event.result.isError === true)
-      startSpinner("thinking")
+      // A result that ends the turn does not get a spinner after it.
+      if (!event.result?.stop) startSpinner("thinking")
       break
     case "notice":
       stopSpinner()

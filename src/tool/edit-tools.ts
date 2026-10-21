@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import { diffStats, diffLines } from "./diff.js"
 import { ToolError, ensureInsideProject, readTextFile } from "./fsutil.js"
-import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
+import { declinedResult, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 /** Create a file or replace its whole content. */
 export const writeTool: Tool = {
@@ -40,10 +40,7 @@ export const writeTool: Tool = {
       alwaysPatterns: [target.relative],
     })
     if (!outcome.granted) {
-      return {
-        output: declinedOutput(`to write ${target.relative}`, outcome.message),
-        isError: true,
-      }
+      return declinedResult(`to write ${target.relative}`, outcome)
     }
 
     const applied = await context.mutate({
@@ -130,10 +127,7 @@ export const editTool: Tool = {
       alwaysPatterns: [target.relative],
     })
     if (!outcome.granted) {
-      return {
-        output: declinedOutput(`to edit ${target.relative}`, outcome.message),
-        isError: true,
-      }
+      return declinedResult(`to edit ${target.relative}`, outcome)
     }
 
     const applied = await context.mutate({

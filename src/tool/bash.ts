@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { ToolError, resolveInProject } from "./fsutil.js"
-import { declinedOutput, type Tool, type ToolContext, type ToolResult } from "./types.js"
+import { declinedResult, type Tool, type ToolContext, type ToolResult } from "./types.js"
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
@@ -80,10 +80,7 @@ export const bashTool: Tool = {
       alwaysPatterns: [command],
     })
     if (!outcome.granted) {
-      return {
-        output: declinedOutput("to run the command", outcome.message),
-        isError: true,
-      }
+      return declinedResult("to run the command", outcome)
     }
 
     const timeout = Math.min(Number(args.timeout ?? DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS)

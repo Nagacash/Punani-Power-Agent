@@ -79,6 +79,13 @@ export interface PermissionOutcome {
   patterns?: string[]
   /** User feedback when rejecting, fed back to the model. */
   message?: string
+  /**
+   * True when nobody answered at all.
+   *
+   * That is not a refusal: there is nobody to say no. The turn ends, rather
+   * than handing the model a refusal it will argue with and retry.
+   */
+  unanswered?: boolean
 }
 
 export interface ToolResult {
@@ -91,6 +98,14 @@ export interface ToolResult {
   image?: { mime: string; data: string }
   /** True when the tool failed; the model is told about the error. */
   isError?: boolean
+  /**
+   * True when the turn should end here.
+   *
+   * Set when the user did not answer, or when the model asked for the same
+   * thing twice after a refusal. Handing that back to the model starts a
+   * loop.
+   */
+  stop?: boolean
   /** Optional metadata for the session log. */
   meta?: Record<string, unknown>
 }
@@ -108,6 +123,26 @@ export function declinedOutput(what: string, feedback?: string): string {
     `do not reach the same result another way, and do not build a workaround. ` +
     `Say what you need and wait.`
   return feedback ? `${base} Feedback: ${feedback}` : base
+}
+
+/**
+ * What a tool returns when the user said no, or said nothing.
+ *
+ * A refusal goes back to the model, because the model has to know. Nobody
+ * answering does not: the turn ends there, so the model is not given a
+ * refusal to argue with and retry for ever.
+ */
+export function declinedResult(what: string, outcome: PermissionOutcome): ToolResult {
+  if (outcome.unanswered) {
+    return {
+      output:
+        `The user did not answer the request ${what}, so the turn stops here. ` +
+        "Say what you need and wait for the answer.",
+      isError: true,
+      stop: true,
+    }
+  }
+  return { output: declinedOutput(what, outcome.message), isError: true }
 }
 
 export interface Tool {
