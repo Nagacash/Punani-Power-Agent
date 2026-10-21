@@ -169,3 +169,24 @@ test("the opencode skill folder is one of the roots", () => {
     "the opencode skills should be discovered",
   )
 })
+
+test("a turn reports only the messages it added, not the history", async () => {
+  const history = [
+    { role: "user" as const, content: "hi" },
+    { role: "assistant" as const, content: "hello" },
+  ]
+  const result = await runAgentTurn(
+    {
+      client: fakeClient("the answer"),
+      model,
+      tools: [],
+      projectRoot: "/tmp/project",
+      context: noopContext,
+    },
+    history,
+  )
+
+  assert.equal(result.added.length, 1)
+  assert.equal(result.added[0]!.content, "the answer")
+  assert.equal(result.messages.length, 3)
+})
