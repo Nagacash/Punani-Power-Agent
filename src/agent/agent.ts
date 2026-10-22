@@ -215,8 +215,16 @@ export interface AgentTurnResult {
 /** How many providers one turn may try before it gives up. */
 const MAX_SWITCHES = 3
 
+/** How long to wait before trying the next model after a rate limit. */
+const RATE_LIMIT_BACKOFF_MS = 3_000
+
 /** How many tool rounds one turn may take before it stops. */
 export const DEFAULT_MAX_STEPS = 40
+
+/** Pause before trying the next model, so a rate-limit window can reset. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]): Promise<AgentTurnResult> {
   const { tools, context, signal } = options
@@ -252,6 +260,11 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
     if (error.kind !== "rate_limit" && error.kind !== "quota" && error.kind !== "network") return false
     if (switches >= MAX_SWITCHES) return false
     const from = model
+    // A rate limit or quota is usually about the provider, not the model:
+    // waiting briefly lets the throttle window reset before trying another model.
+    if (error.kind === "rate_limit" || error.kind === "quota") {
+      await sleep(RATE_LIMIT_BACKOFF_MS)
+    }
     const next = await options.fallback(error, from)
     if (!next) return false
     switches++
