@@ -130,10 +130,13 @@ export async function startApp(deps: AppDeps): Promise<void> {
   }
   infoLine("Type /help for commands, /exit to quit.")
 
-  // Ctrl+C stops the turn that is running. With no turn running there is
-  // nothing to stop, and the prompt takes the interrupt as its answer.
+  // Ctrl+C stops the turn that is running. If the user presses it again while
+  // no turn is running, the prompt takes the interrupt as its answer and the
+  // session ends. A second Ctrl+C during a turn asks for a full exit.
+  let exitRequested = false
   deps.setInterruptHandler?.(() => {
     deps.state.abort?.()
+    exitRequested = true
   })
 
   // Start the MCP servers and fold their tools into the agent's tool set.
@@ -166,6 +169,7 @@ export async function startApp(deps: AppDeps): Promise<void> {
         sessions.append(deps.state.session, { role: "user", content: handled.turn, timestamp: Date.now() })
         deps.state.messages.push({ role: "user", content: handled.turn })
         await runTurn(deps, permissions)
+        if (exitRequested) break
       }
       continue
     }
@@ -177,6 +181,7 @@ export async function startApp(deps: AppDeps): Promise<void> {
     deps.state.messages.push({ role: "user", content: input })
 
     await runTurn(deps, permissions)
+    if (exitRequested) break
   }
 
   infoLine("bye")
@@ -275,13 +280,17 @@ async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<vo
         renderPermissionRequest(pending)
         let decision
         try {
-          const reply = await ask(`${style.yellow("?")} `)
+          const reply = await withTimeout(
+            ask(`${style.yellow("?")} `),
+            PERMISSION_TIMEOUT_MS,
+            `no answer to the ${request.action} request within ${PERMISSION_TIMEOUT_MS / 1000}s`,
+          )
           stdout.write("\n")
           decision = interpretPermissionReply(reply, pending)
         } catch {
-          // The user interrupted the prompt. Nobody answered, so the turn
-          // ends here rather than arguing with a refusal that was never
-          // given.
+          // The user interrupted the prompt, or the timeout fired. Nobody
+          // answered, so the turn ends here rather than arguing with a
+          // refusal that was never given.
           stdout.write("\n")
           decision = { granted: false, unanswered: true }
         }
@@ -513,6 +522,26 @@ async function reportError(error: import("../llm/errors.js").LlmError, deps: App
 
 function truncateForDetail(detail: string): string {
   return detail.length > 300 ? `${detail.slice(0, 300)}…` : detail
+}
+
+/** How long the user has to answer a permission prompt before it times out. */
+const PERMISSION_TIMEOUT_MS = 30_000
+
+/** Race a promise against a timeout. On timeout, rejects with a message. */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 function rest0(argument: string): string[] {

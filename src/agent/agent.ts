@@ -477,7 +477,7 @@ async function runToolCall(
   emit?.({ type: "tool_end", tool: call.name, toolCallId: call.id, result })
 
   // A refusal is remembered. Asking for the same thing again is a loop.
-  if (result.isError && result.output.startsWith("The user declined")) {
+  if (result.isError && (result.output.startsWith("The user declined") || result.output.startsWith("The user did not answer"))) {
     turn.refused.add(callKey(call))
   }
 
