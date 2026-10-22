@@ -203,7 +203,20 @@ async function runSetup(
   }
 
   const { key } = registry.keyFor(provider)
-  if (!key && !provider.anonymous) {
+  if (key && !provider.anonymous) {
+    const renew = (await ask(`${style.green("›")} a key is already stored for ${provider.id}. Replace it? (y/n) `)).trim().toLowerCase()
+    if (renew !== "y" && renew !== "yes") {
+      infoLine(`keeping the existing key for ${provider.id}.`)
+    } else {
+      const entered = (await ask(`${style.green("›")} API key for ${provider.id}: `)).trim()
+      if (!entered) {
+        warnLine("no key entered, keeping the existing one.")
+      } else {
+        config.setApiKey(provider.id, entered)
+        successLine(`key renewed in ${config.path} (mode 0600)`)
+      }
+    }
+  } else if (!key && !provider.anonymous) {
     const entered = (await ask(`${style.green("›")} API key for ${provider.id}: `)).trim()
     if (!entered) {
       warnLine("no key entered. You can add one later with: punani --provider " + provider.id)
