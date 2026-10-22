@@ -221,7 +221,23 @@ const RATE_LIMIT_BACKOFF_MS = 3_000
 /** How many tool rounds one turn may take before it stops. */
 export const DEFAULT_MAX_STEPS = 40
 
-/** Pause before trying the next model, so a rate-limit window can reset. */
+/** Pause before trying the next model, so a rate-limit window can reset.
+ *
+ * Honors the turn's abort signal: if the user cancels while waiting, the
+ * sleep resolves early and the switch is not attempted. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return sleep(ms)
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(new Error("aborted"))
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+/** Pause for ms milliseconds. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -263,7 +279,12 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
     // A rate limit or quota is usually about the provider, not the model:
     // waiting briefly lets the throttle window reset before trying another model.
     if (error.kind === "rate_limit" || error.kind === "quota") {
-      await sleep(RATE_LIMIT_BACKOFF_MS)
+      try {
+        await abortableSleep(RATE_LIMIT_BACKOFF_MS, signal)
+      } catch {
+        // The turn was cancelled while waiting. Do not attempt the switch.
+        return false
+      }
     }
     const next = await options.fallback(error, from)
     if (!next) return false

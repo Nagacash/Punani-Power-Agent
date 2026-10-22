@@ -47,8 +47,8 @@ function workingClient(reply: string): ChatClient {
   } as unknown as ChatClient
 }
 
-test("three rate limits exhaust MAX_SWITCHES and end the turn as an error", async () => {
-  let switches = 0
+test("three switches exhaust MAX_SWITCHES and end the turn as an error", async () => {
+  let fallbackCalls = 0
   const result = await runAgentTurn(
     {
       client: rateLimitedClient("model-a"),
@@ -57,16 +57,17 @@ test("three rate limits exhaust MAX_SWITCHES and end the turn as an error", asyn
       projectRoot: "/tmp/project",
       context: noopContext,
       fallback: async (_error, failed) => {
-        switches++
+        fallbackCalls++
         if (failed.id === "model-a") return { client: rateLimitedClient("model-b"), model: makeModel("model-b", "openrouter") }
         if (failed.id === "model-b") return { client: rateLimitedClient("model-c"), model: makeModel("model-c", "openrouter") }
+        if (failed.id === "model-c") return { client: rateLimitedClient("model-d"), model: makeModel("model-d", "openrouter") }
         return undefined
       },
     },
     [{ role: "user", content: "hi" }],
   )
 
-  assert.equal(switches, 3)
+  assert.equal(fallbackCalls, 3)
   assert.equal(result.stoppedReason, "error")
   assert.equal(result.error?.kind, "rate_limit")
 })
