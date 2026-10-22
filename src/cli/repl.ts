@@ -78,6 +78,8 @@ export interface AppDeps {
    * then not printed again, so it does not appear twice.
    */
   echoesInput?: boolean
+  /** Clears the pending line resolver, so a late keypress cannot be consumed by a later prompt. */
+  clearPending?: () => void
   /** Mutable, so the commands can switch models, sessions and projects. */
   state: {
     model: ModelInfo
@@ -290,7 +292,9 @@ async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<vo
         } catch {
           // The user interrupted the prompt, or the timeout fired. Nobody
           // answered, so the turn ends here rather than arguing with a
-          // refusal that was never given.
+          // refusal that was never given. Clear the pending resolver so a
+          // late keypress cannot be consumed by a later prompt.
+          deps.clearPending?.()
           stdout.write("\n")
           decision = { granted: false, unanswered: true }
         }
@@ -1408,6 +1412,8 @@ export function createPrompter(
   askSecret: SecretPrompter
   close: () => void
   echoesInput: boolean
+  /** Clears the pending line resolver, so a late keypress cannot be consumed by a later prompt. */
+  clearPending: () => void
   /** Registers the handler for Ctrl+C. */
   onInterrupt: (handler: (() => void) | undefined) => void
 } {
@@ -1421,15 +1427,15 @@ export function createPrompter(
     completer: makeCompleter(options),
   })
   const queue: string[] = []
-  let pending: { resolve: (line: string) => void; reject: (error: Error) => void } | undefined
+  let linePending: { resolve: (line: string) => void; reject: (error: Error) => void } | undefined
   let interrupt: (() => void) | undefined
 
   // The terminal is in raw mode while the app is reading, so Ctrl+C does not
   // raise a signal: it arrives as a key press. The prompt has to hear it.
   rl.on("line", (line) => {
-    if (pending) {
-      const waiting = pending
-      pending = undefined
+    if (linePending) {
+      const waiting = linePending
+      linePending = undefined
       waiting.resolve(line)
       return
     }
@@ -1437,8 +1443,8 @@ export function createPrompter(
   })
 
   const cancel = (): void => {
-    const waiting = pending
-    pending = undefined
+    const waiting = linePending
+    linePending = undefined
     waiting?.reject(new Interrupted())
   }
 
@@ -1468,19 +1474,19 @@ export function createPrompter(
       stdout.write(question)
       try {
         const answer = await new Promise<string>((resolve, reject) => {
-          pending = { resolve, reject }
-        })
-        return answer
-      } finally {
-        io.output = real
-        stdout.write("\n")
-      }
-    }
+      linePending = { resolve, reject }
+    })
+    return answer
+  } finally {
+    io.output = real
+    stdout.write("\n")
+  }
+}
     stdout.write(question)
     const buffered = queue.shift()
     if (buffered !== undefined) return buffered
     return await new Promise<string>((resolve, reject) => {
-      pending = { resolve, reject }
+      linePending = { resolve, reject }
     })
   }
 
@@ -1489,6 +1495,9 @@ export function createPrompter(
     askSecret: async (question: string) => read(question, true),
     close: () => rl.close(),
     echoesInput,
+    clearPending: () => {
+      linePending = undefined
+    },
     onInterrupt: (handler: (() => void) | undefined) => {
       interrupt = handler
     },

@@ -365,7 +365,7 @@ async function main(): Promise<number> {
     commands: COMMAND_NAMES,
     projectRoot: options.project ?? process.cwd(),
   })
-  const { ask, askSecret, close, echoesInput } = prompter
+  const { ask, askSecret, close, echoesInput, clearPending } = prompter
 
   try {
     if (options.listProviders) {
@@ -574,6 +574,7 @@ async function main(): Promise<number> {
       resume,
       askSecret,
       echoesInput,
+      clearPending,
       setInterruptHandler: (handler) => prompter.onInterrupt(handler),
     }
 
@@ -591,9 +592,9 @@ async function main(): Promise<number> {
 
 main()
   .then((code) => {
-    process.exit(code)
+    process.exitCode = code
   })
   .catch((error) => {
     errorLine(redactError(error))
-    process.exit(1)
+    process.exitCode = 1
   })
