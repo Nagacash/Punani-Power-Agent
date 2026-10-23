@@ -99,20 +99,20 @@ const IGNORED = new Set([
 
 export type PreviewMode = "static" | "url" | "file" | "off"
 
-/** The script that reloads the page when the source changes. */
-const LIVE_RELOAD = `<script>
-(() => {
-  let socket;
-  const connect = () => {
-    socket = new EventSource("/preview/live");
-    socket.onmessage = (event) => {
-      if (event.data === "reload") location.reload();
-    };
-    socket.onerror = () => { socket.close(); setTimeout(connect, 1500); };
-  };
-  connect();
-})();
-</script>`
+/**
+ * The script that reloads the page when the source changes.
+ *
+ * A script tag, not an event stream. The preview page is served sandboxed, so
+ * it has an opaque origin and the browser will not let it read a
+ * cross-origin response: an EventSource there is refused, and it retries
+ * every second and a half for ever. A script tag is not read, it is executed,
+ * so it works from a sandboxed page and the sandbox stays.
+ *
+ * The tag is async so the open connection never holds up the page.
+ */
+function liveReloadScript(key: string): string {
+  return `<script src="/preview/live?k=${encodeURIComponent(key)}" async></script>`
+}
 
 export class PreviewServer extends EventEmitter {
   private watcher?: fs.FSWatcher
@@ -126,6 +126,15 @@ export class PreviewServer extends EventEmitter {
   file = ""
   /** The port the built-in static server listens on. */
   port = 0
+  /**
+   * The key the reload channel is addressed with.
+   *
+   * The preview page is sandboxed, so it cannot hold the session cookie: its
+   * requests count as cross-site, and a SameSite=Strict cookie is not sent.
+   * The reload channel therefore carries its own key, which is put in the
+   * page and lets the page open the channel. It opens nothing else.
+   */
+  reloadKey = ""
 
   constructor(private projectRoot: string) {
     super()
@@ -330,19 +339,31 @@ export class PreviewServer extends EventEmitter {
     }
   }
 
-  /** Read a file, adding the reload script to HTML. */
-  read(file: string, type: string): Buffer {
+  /**
+   * Read a file, adding the reload script to HTML.
+   *
+   * The script is added to the index only. It reloads the page by navigating
+   * to its own path with the key, and the key opens the index and the
+   * channel. A page at another path would navigate to a path the key does
+   * not open, and land on a refusal.
+   *
+   * A page at another path is not left without live reload: the app reloads
+   * its own preview from the outside, where the frame is same-origin and the
+   * session works.
+   */
+  read(file: string, type: string, isIndex = false): Buffer {
     const bytes = fs.readFileSync(file)
-    if (!type.startsWith("text/html")) return bytes
+    if (!type.startsWith("text/html") || !isIndex) return bytes
     const html = bytes.toString("utf8")
     if (html.includes("/preview/live")) return bytes
+    const marker = liveReloadScript(this.reloadKey)
     // Inject before </body> when there is one, else before </html>, else append.
     if (/<\/body>/i.test(html)) {
-      return Buffer.from(html.replace(/<\/body>/i, `${LIVE_RELOAD}\n</body>`), "utf8")
+      return Buffer.from(html.replace(/<\/body>/i, `${marker}\n</body>`), "utf8")
     }
     if (/<\/html>/i.test(html)) {
-      return Buffer.from(html.replace(/<\/html>/i, `${LIVE_RELOAD}\n</html>`), "utf8")
+      return Buffer.from(html.replace(/<\/html>/i, `${marker}\n</html>`), "utf8")
     }
-    return Buffer.from(`${html}\n${LIVE_RELOAD}\n`, "utf8")
+    return Buffer.from(`${html}\n${marker}\n`, "utf8")
   }
 }

@@ -272,9 +272,16 @@ async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<vo
     },
   })
 
+  // The signal lives on this turn, so it has to exist before the context that
+  // carries it. Without it the tools cannot be stopped: a command that is
+  // already running is never killed, and the turn waits for it for ever.
+  const controller = new AbortController()
+
   const context: ToolContext = {
     projectRoot,
     allowedReadDirs: defaultRoots(projectRoot).map((root) => root.path),
+    // Ctrl+C aborts this signal. A tool that is running reads it and stops.
+    signal: controller.signal,
     requestPermission: (request) =>
       resolvePermission(permissions, request, async (pending) => {
         // The prompt owns the screen while it is up.
@@ -319,7 +326,6 @@ async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<vo
   )
   const withSystem: ChatMessage[] = [{ role: "system", content: system }, ...messages]
 
-  const controller = new AbortController()
   const onSigint = (): void => controller.abort()
   process.on("SIGINT", onSigint)
   deps.state.abort = onSigint

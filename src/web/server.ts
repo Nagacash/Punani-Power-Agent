@@ -236,6 +236,10 @@ export class WebServer {
     this.settings = new Settings(this.config)
     this.rescanSkills(options.projectRoot)
     this.preview = new PreviewServer(options.projectRoot)
+    // The key only opens the reload channel. It is put in the preview page,
+    // so a sandboxed page can reach the channel without the session cookie,
+    // which a sandboxed page cannot send.
+    this.preview.reloadKey = crypto.randomBytes(16).toString("hex")
     this.preview.on("reload", () => this.hub.send({ type: "reload" }))
     this.preview.on("state", (state) => this.hub.send({ type: "preview", ...state }))
     this.extraRoots = options.extraRoots ?? []
@@ -583,7 +587,11 @@ export class WebServer {
       return
     }
     try {
-      const bytes = this.preview.read(resolved.file, resolved.type)
+      // Only the index is addressed with the key. The reload navigates to the
+      // page's own path with the key, and the key opens the index, so a page
+      // at another path must not carry it.
+      const isIndex = this.isPreviewIndex(requestPath)
+      const bytes = this.preview.read(resolved.file, resolved.type, isIndex)
       response.writeHead(200, {
         "content-type": resolved.type,
         "cache-control": "no-store",
@@ -591,6 +599,9 @@ export class WebServer {
         // own origin, so a page the model wrote cannot use the session the
         // app holds, and a site cannot read the project through it.
         "content-security-policy": "sandbox allow-scripts allow-forms allow-popups",
+        // The reload key is in the page. Without this it rides along to
+        // whatever the page loads from the internet.
+        "referrer-policy": "no-referrer",
       })
       response.end(bytes)
     } catch {
@@ -599,19 +610,53 @@ export class WebServer {
     }
   }
 
-  /** The reload channel for the preview. */
+  /**
+   * The reload channel for the preview.
+   *
+   * It is a script, not an event stream, because the preview page is served
+   * sandboxed and a sandboxed page cannot read a cross-origin response. A
+   * script tag is executed instead of read, so the browser runs it and the
+   * page reloads itself.
+   *
+   * The response stays open until something changes. A browser runs a script
+   * when it has finished arriving, never while it is still streaming, so the
+   * response ends with the reload command. The page reloads, and the new page
+   * opens a new channel.
+   */
   private sendPreviewEvents(request: http.IncomingMessage, response: http.ServerResponse): void {
     response.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache, no-transform",
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "no-store",
       connection: "keep-alive",
     })
-    response.write(": connected\n\n")
+    // A comment keeps the connection warm without running anything. The first
+    // one goes out at once, so the browser has something to parse and the
+    // page knows the channel is open.
+    response.write("// ready\n")
+    let open = true
     const unsubscribe = this.hub.subscribe((event) => {
-      if (event.type === "reload") response.write(`data: reload\n\n`)
+      if (event.type !== "reload" || !open) return
+      open = false
+      // Ending the response is what makes the browser run the script.
+      //
+      // The page has to come back with the key, not with the session: the
+      // page is sandboxed, so a navigation it starts is cross-site and the
+      // session cookie is not sent with it. The key opens the page and the
+      // channel, and nothing else.
+      //
+      // A page in a frame is left alone. The app reloads its own preview
+      // from the outside, where the frame is same-origin and the session
+      // works, so the frame must not reload itself as well.
+      response.end(
+        `if (window.top === window.self) window.location.replace(location.pathname + "?k=${this.preview.reloadKey}");\n`,
+      )
     })
-    const keepAlive = setInterval(() => response.write(": ping\n\n"), 20_000)
+    const keepAlive = setInterval(() => {
+      if (!open) return
+      response.write("// ping\n")
+    }, 20_000)
     request.on("close", () => {
+      open = false
       clearInterval(keepAlive)
       unsubscribe()
     })
@@ -926,6 +971,18 @@ export class WebServer {
 
     const header = request.headers["x-punani-token"]
     const cookie = parseCookie(request.headers.cookie ?? "")["punani"]
+    // The reload channel and the page itself carry their own key. The
+    // preview page is sandboxed, so its requests count as cross-site and the
+    // session cookie is not sent with them.
+    //
+    // The key opens the channel and the page, and nothing else. Any other
+    // file in the project still needs the session, so a page that reads the
+    // key out of its own markup cannot walk off and read the project.
+    if (url.pathname === "/preview/live" || this.isPreviewIndex(url.pathname)) {
+      const key = url.searchParams.get("k")
+      if (key && key === this.preview.reloadKey) return null
+    }
+
     // The token in the query string is only for the sign-in exchange. On
     // every other path it would end up in history and in referrers.
     const query = url.pathname === "/" || url.pathname === "/session" ? url.searchParams.get("t") : null
@@ -950,6 +1007,21 @@ export class WebServer {
       if (originHost !== host) return 403
     }
     return null
+  }
+
+  /**
+   * Is this the preview page itself?
+   *
+   * The index of the project, and nothing else. The reload key opens this
+   * one page and the reload channel. Every other file needs the session, so
+   * a page that reads the key cannot use it to walk the project.
+   *
+   * pathname may be the full URL path (/preview/) or the slice passed to
+   * sendPreviewFile ("/"), so both forms are accepted.
+   */
+  private isPreviewIndex(pathname: string): boolean {
+    return pathname === "/preview/" || pathname === "/preview" || pathname === "/preview/index.html"
+      || pathname === "/" || pathname === "/index.html"
   }
 
   /**

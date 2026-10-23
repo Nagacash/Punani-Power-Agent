@@ -86,6 +86,12 @@ export const bashTool: Tool = {
     const timeout = Math.min(Number(args.timeout ?? DEFAULT_TIMEOUT_MS), MAX_TIMEOUT_MS)
     const shell = process.env.PUNANI_SHELL || process.env.SHELL || "/bin/sh"
 
+    // The turn was cancelled before the command even started. A signal that
+    // already fired will not fire again, so this has to be checked here.
+    if (context.signal?.aborted) {
+      return { output: "the turn was stopped before the command ran", isError: true, stop: true }
+    }
+
     return await new Promise<ToolResult>((resolve) => {
       let child
       try {
@@ -93,10 +99,42 @@ export const bashTool: Tool = {
           cwd: workdir.absolute,
           env: { ...process.env, PUNANI_PROJECT_ROOT: context.projectRoot },
           stdio: ["ignore", "pipe", "pipe"],
+          // Its own process group, so the whole tree can be stopped at once.
+          // Without this, killing the shell leaves whatever the command
+          // started still running.
+          detached: true,
         })
       } catch (error) {
         resolve({ output: `could not start the shell: ${(error as Error).message}`, isError: true })
         return
+      }
+
+      // The process group the shell leads. A command like "npm run dev" starts
+      // children of its own, and they outlive the shell unless the group goes
+      // with it.
+      const group = child.pid
+
+      /** Stop the command and everything it started. */
+      const kill = (): void => {
+        if (group === undefined) {
+          try {
+            child.kill("SIGKILL")
+          } catch {
+            /* already exited */
+          }
+          return
+        }
+        try {
+          process.kill(-group, "SIGKILL")
+        } catch {
+          // The group is already gone, or the platform refused it. The
+          // shell itself still has to die.
+          try {
+            child.kill("SIGKILL")
+          } catch {
+            /* already exited */
+          }
+        }
       }
 
       const chunks: Buffer[] = []
@@ -125,11 +163,13 @@ export const bashTool: Tool = {
 
       const timer = setTimeout(() => {
         timedOut = true
-        child.kill("SIGKILL")
+        kill()
       }, timeout)
 
+      let aborted = false
       const onAbort = (): void => {
-        child.kill("SIGKILL")
+        aborted = true
+        kill()
       }
       context.signal?.addEventListener("abort", onAbort, { once: true })
 
@@ -146,13 +186,18 @@ export const bashTool: Tool = {
         const parts: string[] = []
         if (output.trim()) parts.push(output.trimEnd())
         if (truncated) parts.push(`[output truncated at ${MAX_OUTPUT_BYTES} bytes]`)
-        if (timedOut) parts.push(`[command timed out after ${timeout}ms]`)
+        if (aborted) parts.push("[the turn was stopped, so the command was ended]")
+        else if (timedOut) parts.push(`[command timed out after ${timeout}ms]`)
         else if (signal) parts.push(`[command killed with ${signal}]`)
         else parts.push(`[exit code ${code ?? 0}]`)
         resolve({
+          // A command that was stopped did not fail: SIGKILL leaves no exit
+          // code, and reporting that as success would tell the model the
+          // work was done.
           output: parts.join("\n"),
-          isError: (code ?? 0) !== 0 || timedOut,
-          meta: { exitCode: code, timedOut, truncated },
+          isError: aborted || (code ?? 0) !== 0 || timedOut,
+          stop: aborted,
+          meta: { exitCode: code, timedOut, truncated, aborted },
         })
       })
     })
