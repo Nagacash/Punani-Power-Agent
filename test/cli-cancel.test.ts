@@ -147,11 +147,16 @@ test("Ctrl+C ends the running command and the turn finishes", async () => {
   config.setApiKey("mock", "mock-secret-value-123456")
   config.setDefaultModel("mock/mock-bash")
 
+  // Node runs the CLI itself. A wrapper such as npx would sit between the
+  // test and the app, and the signal would stop at the wrapper.
+  //
+  // The cwd is the checkout, so the tsx loader resolves. The project is
+  // chosen with -C, and the commands run there.
   const child: ChildProcess = spawn(
-    "npx",
-    ["tsx", CLI, "-C", projectRoot, "-m", "mock/mock-bash"],
+    process.execPath,
+    ["--import", "tsx", CLI, "-C", projectRoot, "-m", "mock/mock-bash"],
     {
-      cwd: projectRoot,
+      cwd: ROOT,
       env: {
         ...process.env,
         XDG_CONFIG_HOME: path.join(home, "config"),
