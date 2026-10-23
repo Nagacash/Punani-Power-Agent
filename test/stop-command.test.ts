@@ -53,20 +53,37 @@ test("cancelling ends the children the command started, not just the shell", asy
   const marker = path.join(root, "grandchild.pid")
   const controller = new AbortController()
 
-  // The shell starts a child of its own and then waits. Killing only the
-  // shell would leave the child writing to the marker for ever.
+  // The shell starts a child of its own, writes that child's pid, and waits.
+  // The test looks for the pid rather than for a side effect, because a
+  // survivor that writes its marker slowly would not be noticed in time.
   const running = bashTool.run(
-    { command: `(sleep 30; echo alive > "${marker}") & wait` },
+    { command: `sh -c 'sleep 30' & echo $! | tee "${marker}"; wait` },
     context(root, controller.signal),
   )
-  await sleep(500)
+
+  // Wait for the pid to be written.
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline && !fs.existsSync(marker)) {
+    await sleep(50)
+  }
+  assert.ok(fs.existsSync(marker), "the child never started")
+  const pid = Number(fs.readFileSync(marker, "utf8").trim())
+  assert.ok(Number.isFinite(pid) && pid > 0, "the child pid was not written")
+
+  // The child is running now.
+  assert.doesNotThrow(() => process.kill(pid, 0), "the child was not running")
+
   controller.abort()
   await running
 
-  // If the child survived, it would write the marker within the next 30
-  // seconds. A short wait is enough to catch a survivor that is about to.
-  await sleep(600)
-  assert.equal(fs.existsSync(marker), false, "the child of the command kept running")
+  // And it is gone. The pid is checked directly, so a survivor cannot pass
+  // by being slow to write a marker.
+  await sleep(300)
+  assert.throws(
+    () => process.kill(pid, 0),
+    /ESRCH/,
+    "the child of the command kept running after the turn was stopped",
+  )
 })
 
 test("a command that is cancelled before it starts never runs", async () => {

@@ -339,10 +339,21 @@ export class PreviewServer extends EventEmitter {
     }
   }
 
-  /** Read a file, adding the reload script to HTML. */
-  read(file: string, type: string): Buffer {
+  /**
+   * Read a file, adding the reload script to HTML.
+   *
+   * The script is added to the index only. It reloads the page by navigating
+   * to its own path with the key, and the key opens the index and the
+   * channel. A page at another path would navigate to a path the key does
+   * not open, and land on a refusal.
+   *
+   * A page at another path is not left without live reload: the app reloads
+   * its own preview from the outside, where the frame is same-origin and the
+   * session works.
+   */
+  read(file: string, type: string, isIndex = false): Buffer {
     const bytes = fs.readFileSync(file)
-    if (!type.startsWith("text/html")) return bytes
+    if (!type.startsWith("text/html") || !isIndex) return bytes
     const html = bytes.toString("utf8")
     if (html.includes("/preview/live")) return bytes
     const marker = liveReloadScript(this.reloadKey)

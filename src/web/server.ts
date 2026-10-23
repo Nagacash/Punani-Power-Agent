@@ -587,7 +587,11 @@ export class WebServer {
       return
     }
     try {
-      const bytes = this.preview.read(resolved.file, resolved.type)
+      // Only the index is addressed with the key. The reload navigates to the
+      // page's own path with the key, and the key opens the index, so a page
+      // at another path must not carry it.
+      const isIndex = this.isPreviewIndex(requestPath)
+      const bytes = this.preview.read(resolved.file, resolved.type, isIndex)
       response.writeHead(200, {
         "content-type": resolved.type,
         "cache-control": "no-store",
@@ -1011,9 +1015,13 @@ export class WebServer {
    * The index of the project, and nothing else. The reload key opens this
    * one page and the reload channel. Every other file needs the session, so
    * a page that reads the key cannot use it to walk the project.
+   *
+   * pathname may be the full URL path (/preview/) or the slice passed to
+   * sendPreviewFile ("/"), so both forms are accepted.
    */
   private isPreviewIndex(pathname: string): boolean {
     return pathname === "/preview/" || pathname === "/preview" || pathname === "/preview/index.html"
+      || pathname === "/" || pathname === "/index.html"
   }
 
   /**

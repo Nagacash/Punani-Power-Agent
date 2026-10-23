@@ -353,8 +353,12 @@ test("the preview serves the project and injects live reload", async () => {
   config.setApiKey("mock", "mock-secret-value-123456")
 
   fs.writeFileSync(
-    path.join(projectRoot, "page.html"),
+    path.join(projectRoot, "index.html"),
     "<!doctype html><html><body><h1>hi</h1></body></html>",
+  )
+  fs.writeFileSync(
+    path.join(projectRoot, "page.html"),
+    "<!doctype html><html><body><h1>another</h1></body></html>",
   )
   fs.writeFileSync(path.join(projectRoot, "style.css"), "body{color:red}")
 
@@ -373,7 +377,7 @@ test("the preview serves the project and injects live reload", async () => {
     assert.equal((await on.json()).mode, "static")
 
     // It serves the project with the reload script injected.
-    const page = await fetch(`${base}/preview/page.html`, { headers: { "x-punani-token": token } })
+    const page = await fetch(`${base}/preview/`, { headers: { "x-punani-token": token } })
     assert.equal(page.status, 200)
     const html = await page.text()
     assert.match(html, /<h1>hi<\/h1>/)
@@ -386,6 +390,13 @@ test("the preview serves the project and injects live reload", async () => {
     // works from a sandboxed page.
     assert.match(html, /<script src="\/preview\/live\?k=[a-f0-9]+" async><\/script>/)
     assert.doesNotMatch(html, /EventSource/)
+
+    // Only the index carries it. The reload navigates to the page's own
+    // path with the key, and the key opens the index, so a page at another
+    // path must not carry it or it would reload into a refusal.
+    const other = await fetch(`${base}/preview/page.html`, { headers: { "x-punani-token": token } })
+    assert.equal(other.status, 200)
+    assert.doesNotMatch(await other.text(), /preview\/live/)
 
     // Content types are right.
     const css = await fetch(`${base}/preview/style.css`, { headers: { "x-punani-token": token } })
@@ -461,33 +472,44 @@ test("the live reload channel is a script that reloads the page", async () => {
     assert.equal(wrongKey.status, 401)
 
     // A change on disk runs the reload command down the open response.
+    //
+    // The response stays open, so the channel has to be closed whatever
+    // happens, or the server never finishes shutting down and the run hangs.
     const controller = new AbortController()
-    const stream = await fetch(`${base}/preview/live?k=${key}`, { signal: controller.signal })
-    const reader = stream.body!.getReader()
-    // The response stays open, so a read with nothing to return waits for
-    // ever. Every read is bounded, so a missing reload fails the test
-    // instead of hanging the run.
-    const read = async (ms: number): Promise<string> => {
-      const chunk = await Promise.race([
-        reader.read().then((c) => (c.done ? "" : new TextDecoder().decode(c.value))),
-        new Promise<string>((resolve) => setTimeout(() => resolve(""), ms)),
-      ])
-      return chunk
-    }
-    assert.match(await read(2_000), /ready/)
+    try {
+      const stream = await fetch(`${base}/preview/live?k=${key}`, { signal: controller.signal })
+      const reader = stream.body!.getReader()
+      // One read is kept and reused. A read that times out is still waiting,
+      // and starting another one would leave the first to take the reload
+      // command and throw it away.
+      let pending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null
+      const read = async (ms: number): Promise<string> => {
+        pending ??= reader.read()
+        const chunk = await Promise.race([
+          pending.then((c) => c),
+          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms)),
+        ])
+        // A read that timed out is still pending, so it is kept for next time.
+        if (!chunk) return ""
+        pending = null
+        return chunk.done ? "" : new TextDecoder().decode(chunk.value)
+      }
+      assert.match(await read(2_000), /ready/)
 
-    setTimeout(() => fs.writeFileSync(path.join(projectRoot, "page.html"), "<p>changed</p>"), 150)
-    let reloadCommand = ""
-    const deadline = Date.now() + 8_000
-    while (Date.now() < deadline && !reloadCommand) {
-      const text = await read(1_000)
-      if (text.includes("location.replace")) reloadCommand = text
+      setTimeout(() => fs.writeFileSync(path.join(projectRoot, "index.html"), "<p>changed</p>"), 150)
+      let reloadCommand = ""
+      const deadline = Date.now() + 8_000
+      while (Date.now() < deadline && !reloadCommand) {
+        const text = await read(1_000)
+        if (text.includes("location.replace")) reloadCommand = text
+      }
+      assert.ok(reloadCommand, "the reload command never reached the page")
+      // The command comes back with the key, so the page can load again: the
+      // session cookie cannot be used, because the page is sandboxed.
+      assert.match(reloadCommand, new RegExp(`k=${key}`))
+    } finally {
+      controller.abort()
     }
-    controller.abort()
-    assert.ok(reloadCommand, "the reload command never reached the page")
-    // The command comes back with the key, so the page can load again: the
-    // session cookie cannot be used, because the page is sandboxed.
-    assert.match(reloadCommand, new RegExp(`k=${key}`))
   } finally {
     await server.stop()
   }
