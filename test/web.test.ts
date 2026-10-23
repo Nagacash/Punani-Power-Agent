@@ -379,6 +379,14 @@ test("the preview serves the project and injects live reload", async () => {
     assert.match(html, /<h1>hi<\/h1>/)
     assert.match(html, /preview\/live/)
 
+    // The marker is a script tag, not an event stream. The preview page is
+    // sandboxed, so it has an opaque origin and the browser will not let it
+    // read a cross-origin response: an EventSource there is refused, and it
+    // retries for ever. A script tag is executed rather than read, so it
+    // works from a sandboxed page.
+    assert.match(html, /<script src="\/preview\/live\?k=[a-f0-9]+" async><\/script>/)
+    assert.doesNotMatch(html, /EventSource/)
+
     // Content types are right.
     const css = await fetch(`${base}/preview/style.css`, { headers: { "x-punani-token": token } })
     assert.match(css.headers.get("content-type") ?? "", /text\/css/)
@@ -392,6 +400,94 @@ test("the preview serves the project and injects live reload", async () => {
     // And it still needs the token.
     const noToken = await fetch(`${base}/preview/page.html`)
     assert.equal(noToken.status, 401)
+  } finally {
+    await server.stop()
+  }
+})
+
+test("the live reload channel is a script that reloads the page", async () => {
+  const config = new ConfigStore(configFile)
+  config.setProvider({
+    id: "mock",
+    kind: "openai-compatible",
+    name: "Mock",
+    baseURL: mockURL,
+    defaultContextWindow: 8_192,
+  })
+  config.setApiKey("mock", "mock-secret-value-123456")
+
+  fs.writeFileSync(path.join(projectRoot, "page.html"), "<!doctype html><html><body></body></html>")
+
+  const server = new WebServer(config, { projectRoot, port: 0, host: "127.0.0.1" })
+  await server.start()
+  const base = `http://127.0.0.1:${server.port}`
+  const token = (server as any).token as string
+
+  try {
+    await fetch(`${base}/api/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-punani-token": token },
+      body: JSON.stringify({ mode: "static" }),
+    })
+
+    // The channel is a script, not an event stream.
+    const live = await fetch(`${base}/preview/live`, { headers: { "x-punani-token": token } })
+    assert.equal(live.status, 200)
+    assert.match(live.headers.get("content-type") ?? "", /javascript/)
+    // The body stays open on purpose, so let it go. An open response keeps
+    // the server from closing, and the test run never finishes.
+    await live.body?.cancel()
+
+    // The page carries the key the channel is addressed with.
+    const key = (server as any).preview.reloadKey as string
+    assert.match(key, /^[a-f0-9]{32}$/)
+
+    // The key opens the page and the channel.
+    fs.writeFileSync(path.join(projectRoot, "index.html"), "<!doctype html><html><body><h1>home</h1></body></html>")
+    const withKey = await fetch(`${base}/preview/?k=${key}`)
+    assert.equal(withKey.status, 200)
+    assert.match(await withKey.text(), /preview\/live\?k=/)
+
+    // It opens nothing else. A page that reads the key out of its own
+    // markup must not be able to walk the project with it.
+    fs.writeFileSync(path.join(projectRoot, "secret.txt"), "not yours\n")
+    for (const route of ["/preview/secret.txt", "/preview/style.css", "/preview/page.html", "/api/state"]) {
+      const refused = await fetch(`${base}${route}?k=${key}`)
+      assert.equal(refused.status, 401, `${route} must not open with the reload key`)
+    }
+
+    // And a wrong key opens nothing.
+    const wrongKey = await fetch(`${base}/preview/?k=${"0".repeat(32)}`)
+    assert.equal(wrongKey.status, 401)
+
+    // A change on disk runs the reload command down the open response.
+    const controller = new AbortController()
+    const stream = await fetch(`${base}/preview/live?k=${key}`, { signal: controller.signal })
+    const reader = stream.body!.getReader()
+    // The response stays open, so a read with nothing to return waits for
+    // ever. Every read is bounded, so a missing reload fails the test
+    // instead of hanging the run.
+    const read = async (ms: number): Promise<string> => {
+      const chunk = await Promise.race([
+        reader.read().then((c) => (c.done ? "" : new TextDecoder().decode(c.value))),
+        new Promise<string>((resolve) => setTimeout(() => resolve(""), ms)),
+      ])
+      return chunk
+    }
+    assert.match(await read(2_000), /ready/)
+
+    setTimeout(() => fs.writeFileSync(path.join(projectRoot, "page.html"), "<p>changed</p>"), 150)
+    let reloadCommand = ""
+    const deadline = Date.now() + 8_000
+    while (Date.now() < deadline && !reloadCommand) {
+      const text = await read(1_000)
+      if (text.includes("location.replace")) reloadCommand = text
+    }
+    controller.abort()
+    assert.ok(reloadCommand, "the reload command never reached the page")
+    // The command comes back with the key, so the page can load again: the
+    // session cookie cannot be used, because the page is sandboxed.
+    assert.match(reloadCommand, new RegExp(`k=${key}`))
   } finally {
     await server.stop()
   }
