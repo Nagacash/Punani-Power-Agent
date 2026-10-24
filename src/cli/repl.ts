@@ -186,6 +186,9 @@ export async function startApp(deps: AppDeps): Promise<void> {
     if (exitRequested) break
   }
 
+  // Stop MCP servers so the event loop can drain and the process exits.
+  await mcp.stop().catch(() => {})
+
   infoLine("bye")
 }
 
