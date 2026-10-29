@@ -27,6 +27,7 @@ import {
 } from "../agent/agent.js"
 import { loadProjectInstructions } from "../agent/instructions.js"
 import { createPlainStream, flushPlainStream, plainStream, plainText } from "../agent/plain.js"
+import { formatTaskSummary } from "../agent/task-summary.js"
 import { SessionStore, type SessionMeta } from "../session/store.js"
 import { type ChatMessage } from "../llm/client.js"
 import type { ModelInfo } from "../provider/types.js"
@@ -506,20 +507,6 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
     default:
       break
   }
-}
-
-function formatTaskSummary(summary: { changed: string[]; commands: string[] }): string {
-  const parts: string[] = []
-  if (summary.changed.length > 0) {
-    const shown = summary.changed.slice(0, 3).join(", ")
-    const more = summary.changed.length > 3 ? ` (+${summary.changed.length - 3} more)` : ""
-    parts.push(`touched ${summary.changed.length} file(s): ${shown}${more}`)
-  }
-  if (summary.commands.length > 0) {
-    parts.push(`ran ${summary.commands.length} command(s)`)
-  }
-  if (parts.length === 0) return "Task complete (no file changes recorded)."
-  return `Task complete · ${parts.join(" · ")}`
 }
 
 /** Explain a provider failure and point at other models that could work. */

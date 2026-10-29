@@ -13,6 +13,7 @@ import { createSkillTools } from "../tool/skill.js"
 import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex } from "../skills/loader.js"
 import { McpRegistry } from "../mcp/registry.js"
 import { buildSystemPrompt, describeProject, runAgentTurn, DEFAULT_MAX_STEPS } from "../agent/agent.js"
+import { formatTaskSummary } from "../agent/task-summary.js"
 import { modelKey } from "../provider/types.js"
 import { loadAlwaysOn, renderAlwaysOn } from "../agent/prompt.js"
 import { buildRoutes, renderRoutes } from "../skills/routing.js"
@@ -1461,6 +1462,9 @@ export class WebServer {
           }
           if (event.type === "notice" && event.text) {
             this.hub.send({ type: "notice", text: event.text })
+          }
+          if (event.type === "summary" && event.summary) {
+            this.hub.send({ type: "notice", text: formatTaskSummary(event.summary) })
           }
         },
       },
