@@ -147,6 +147,9 @@ test("a picture the model cannot see says so, and says not to work around it", a
 test("the prompt says to answer first, to respect a decline, and to sound human", () => {
   const prompt = buildSystemPrompt("/tmp/project", { vision: true })
   assert.match(prompt, /Answer first/)
+  assert.match(prompt, /Closing a turn/)
+  assert.match(prompt, /should not have to ask whether you finished/)
+  assert.match(prompt, /Cursor-style/)
   assert.match(prompt, /A declined call is a decision/)
   assert.match(prompt, /do not build a workaround/)
   assert.match(prompt, /No 'Great question'/)

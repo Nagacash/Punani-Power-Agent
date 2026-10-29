@@ -103,6 +103,32 @@ const LEGACY_PERMISSIONS: Record<string, PermissionRule[]> = {
  */
 export const PERMISSIONS_VERSION = 2
 
+/** Media backends store keys here — not duplicated under `image` / `audio`. */
+export const MEDIA_API_KEY_IDS = ["elevenlabs", "kling", "fal"] as const
+
+function normalizeMediaKeys(config: ConfigFile): boolean {
+  let migrated = false
+  if (config.audio.apiKey) {
+    if (!config.apiKeys.elevenlabs) config.apiKeys.elevenlabs = config.audio.apiKey
+    delete config.audio.apiKey
+    migrated = true
+  }
+  if (config.image.provider === "kling" && config.image.apiKey) {
+    delete config.image.apiKey
+    migrated = true
+  }
+  const eleven = config.apiKeys.elevenlabs
+  if (
+    eleven &&
+    config.image.apiKey === eleven &&
+    config.image.provider !== "openai-compatible"
+  ) {
+    delete config.image.apiKey
+    migrated = true
+  }
+  return migrated
+}
+
 function emptyConfig(): ConfigFile {
   return {
     version: 1,
@@ -242,7 +268,8 @@ function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean } 
       if (value && typeof value === "object") config.headers[id] = value
     }
   }
-  return { config, migratedPermissions }
+  const migratedMedia = normalizeMediaKeys(config)
+  return { config, migratedPermissions: migratedPermissions || migratedMedia }
 }
 
 export class ConfigStore {
@@ -388,6 +415,50 @@ export class ConfigStore {
     return this.get().headers[providerId] ?? {}
   }
 
+  /** ElevenLabs key lives under `apiKeys.elevenlabs` (legacy: `audio.apiKey`). */
+  elevenLabsKey(): string | undefined {
+    const config = this.get()
+    return config.apiKeys.elevenlabs ?? config.audio.apiKey
+  }
+
+  mediaKey(id: (typeof MEDIA_API_KEY_IDS)[number]): string | undefined {
+    return this.get().apiKeys[id]
+  }
+
+  setMediaKey(id: (typeof MEDIA_API_KEY_IDS)[number], key: string): void {
+    const value = key.trim()
+    if (!value) return
+    const config = this.get()
+    config.apiKeys[id] = value
+    registerSecret(value)
+    if (id === "elevenlabs") delete config.audio.apiKey
+    if (id === "kling" && config.image.provider === "kling") delete config.image.apiKey
+    this.save()
+  }
+
+  /** Image settings with keys resolved for the active backend. */
+  resolvedImageSettings(): ImageSettings {
+    const image = { ...this.get().image }
+    if (image.provider === "kling") {
+      delete image.apiKey
+      return image
+    }
+    if (image.provider === "openai-compatible") {
+      const fal = this.get().apiKeys.fal
+      if (!image.apiKey && fal) image.apiKey = fal
+      return image
+    }
+    return image
+  }
+
+  /** Speech settings; ElevenLabs auth comes from `apiKeys.elevenlabs`. */
+  resolvedAudioSettings(): AudioSettings {
+    const audio = { ...this.get().audio }
+    delete audio.apiKey
+    const key = this.elevenLabsKey()
+    return key ? { ...audio, apiKey: key } : audio
+  }
+
   imageSettings(): ImageSettings {
     return this.get().image
   }
@@ -408,15 +479,21 @@ export class ConfigStore {
 
   setAudioSettings(settings: AudioSettings): void {
     const config = this.get()
-    config.audio = settings
-    if (settings.apiKey) registerSecret(settings.apiKey)
+    const { apiKey, ...audio } = settings
+    config.audio = audio
+    if (typeof apiKey === "string" && apiKey.trim()) {
+      config.apiKeys.elevenlabs = apiKey.trim()
+      registerSecret(apiKey)
+    }
     this.save()
   }
 
   setImageSettings(settings: ImageSettings): void {
     const config = this.get()
-    config.image = settings
-    if (settings.apiKey) registerSecret(settings.apiKey)
+    const next = { ...settings }
+    if (next.provider === "kling") delete next.apiKey
+    config.image = next
+    if (next.provider === "openai-compatible" && next.apiKey) registerSecret(next.apiKey)
     this.save()
   }
 

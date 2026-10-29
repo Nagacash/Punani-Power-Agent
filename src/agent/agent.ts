@@ -38,9 +38,10 @@ export function buildSystemPrompt(
     "",
     "Answer first:",
     "- The user reads the reply, not your thinking. Keep deliberation in your thinking, never in the reply.",
-    "- Lead with the answer or the plan. No preamble, no restating the question, no recap.",
+    "- Lead with the answer or the plan. No empty preamble and no restating the question word for word.",
     "- If the question can be answered without tools, answer it and stop. Do not explore the project to be helpful.",
     "- A greeting, an opinion or a question about what you were already shown is answered, not investigated.",
+    "- Match depth to the ask: one line for a hello, a short structured recap after real tool work.",
     "",
     "Working in the project:",
     "- Use the tools to inspect and change files. Do not guess file contents; read them first.",
@@ -65,22 +66,26 @@ export function buildSystemPrompt(
     "  Say so and work without it. Do not load a big workflow for a small task.",
     "- A skill can ask for receipts: the tools the turn has to have used. Produce them before you say you are done.",
     "",
-    "How to write:",
-    "- Plain prose. No markdown: no **bold**, no # headings, no ``` code fences, no tables.",
-    "  The reply is read as plain text, so markdown syntax shows up as noise.",
-    "- Short paragraphs, one idea each. A sentence or two beats a wall of text.",
-    "- When something fails, say what failed, why it failed, and what to do next.",
+    "Closing a turn:",
+    "- When you used tools, end with a brief recap: what changed, what you verified, and what is still blocked.",
+    "- The user should not have to ask whether you finished. If nothing changed, say that plainly.",
+    "",
+    "How to write (Cursor-style, plain text UI):",
+    "- Write like a strong IDE pair-programmer: complete sentences, precise, easy to scan.",
+    "- Use short paragraphs. Use `- ` bullet lines for steps, options, or lists of files.",
+    "- Do not use # headings, **bold**, tables, or ``` code fences. The terminal and browser strip markdown syntax.",
+    "- Put commands, paths, and code identifiers in backticks.",
+    "- When something fails, say what failed, why, and what to do next.",
     "  Never answer with a bare error string like 'connection refused'.",
-    "- Put commands, paths and code in backticks so they read as one item.",
-    "- After editing, state clearly what changed and whether it was verified.",
     "- If a task needs information you cannot get from the tools, say so plainly.",
     "",
     "Voice:",
-    "- Write like a person, not a chatbot. No 'Great question', no 'I hope this helps', no 'Let me know if'.",
+    "- Direct colleague tone, not a chatbot. No 'Great question', no 'I hope this helps', no 'Let me know if'.",
     "- No puffery: delve, leverage, robust, seamless, comprehensive, pivotal, landscape, ensure. Say what happened.",
-    "- No 'not just X but Y', no rule of three, no bold label followed by a colon.",
+    "- No engagement bait or forced follow-up questions at the end.",
     "- No em dash. Use a comma or a full stop.",
-    "- Take a position. Do not hedge every sentence with 'might' or 'could'.",
+    "- Take a position when the evidence supports it; say when you are unsure.",
+    "- If the user steers mid-task, treat it as refinement unless they clearly change direction.",
   ]
 
   const media: string[] = []
@@ -121,7 +126,7 @@ export function buildSystemPrompt(
 }
 
 export interface AgentEvent {
-  type: "assistant_text" | "reasoning" | "tool_start" | "tool_end" | "error" | "usage" | "done" | "notice"
+  type: "assistant_text" | "reasoning" | "tool_start" | "tool_end" | "error" | "usage" | "done" | "notice" | "summary"
   text?: string
   /** True when `text` is a streaming chunk, not the full reply. */
   partial?: boolean
@@ -131,6 +136,8 @@ export interface AgentEvent {
   result?: ToolResult
   error?: LlmError
   usage?: { inputTokens: number; outputTokens: number; cost: number }
+  /** What the turn actually did, so the user does not have to guess. */
+  summary?: { changed: string[]; commands: string[] }
 }
 
 /** A client and model to carry on with after a provider refused the request. */
@@ -255,7 +262,13 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
   let cost = 0
   let switches = 0
   // What the turn actually did, so a skill's receipts can be checked.
-  const turn: TurnState = { loadedSkills: [], toolsUsed: new Set(), refused: new Set() }
+  const turn: TurnState = {
+    loadedSkills: [],
+    toolsUsed: new Set(),
+    refused: new Set(),
+    changed: [],
+    commands: [],
+  }
   // The messages this turn produced, for the session log.
   const added: ChatMessage[] = []
   // What each model call cost, so the transcript can say so per step.
@@ -410,6 +423,10 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
 
     if (completion.toolCalls.length === 0) {
       options.onEvent?.({ type: "usage", usage: usage() })
+      options.onEvent?.({
+        type: "summary",
+        summary: { changed: [...turn.changed], commands: [...turn.commands] },
+      })
       checkReceipts(options, turn.loadedSkills, turn.toolsUsed)
       return { messages, added, usage: usage(), steps, compaction, stoppedReason: "finished" }
     }
@@ -435,6 +452,10 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
 
   log.warn(`turn stopped after ${maxSteps} tool steps, to stay within budget`)
   options.onEvent?.({ type: "usage", usage: usage() })
+  options.onEvent?.({
+    type: "summary",
+    summary: { changed: [...turn.changed], commands: [...turn.commands] },
+  })
   return { messages, added, usage: usage(), steps, compaction, stoppedReason: "max_steps" }
 }
 
@@ -446,6 +467,10 @@ interface TurnState {
   toolsUsed: Set<string>
   /** The calls the user refused, so the same one is not asked for twice. */
   refused: Set<string>
+  /** Files the turn created or edited, relative to the project root. */
+  changed: string[]
+  /** Commands the turn ran. */
+  commands: string[]
 }
 
 /**
@@ -509,6 +534,15 @@ async function runToolCall(
   }
 
   emit?.({ type: "tool_end", tool: call.name, toolCallId: call.id, result })
+
+  // Keep track of what the turn actually did, so the end of the turn can
+  // tell the user plainly what changed. A failure is not a change.
+  if (result.meta?.path && !result.isError) {
+    turn.changed.push(String(result.meta.path))
+  }
+  if (call.name === "bash" && args.command && !result.isError) {
+    turn.commands.push(String(args.command))
+  }
 
   // A refusal is remembered. Asking for the same thing again is a loop.
   if (result.isError && (result.output.startsWith("The user declined") || result.output.startsWith("The user did not answer"))) {

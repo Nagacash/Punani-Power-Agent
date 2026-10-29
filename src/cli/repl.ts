@@ -27,6 +27,7 @@ import {
 } from "../agent/agent.js"
 import { loadProjectInstructions } from "../agent/instructions.js"
 import { createPlainStream, flushPlainStream, plainStream, plainText } from "../agent/plain.js"
+import { formatTaskSummary } from "../agent/task-summary.js"
 import { SessionStore, type SessionMeta } from "../session/store.js"
 import { type ChatMessage } from "../llm/client.js"
 import type { ModelInfo } from "../provider/types.js"
@@ -234,7 +235,7 @@ function loadProject(deps: AppDeps, root: string): Tool[] {
   }
 
   return [
-    ...buildTools(config.imageSettings(), config.audioSettings(), deps.mcpTools ?? []),
+    ...buildTools(config.resolvedImageSettings(), config.resolvedAudioSettings(), deps.mcpTools ?? []),
     ...createSkillTools(groups, skills),
   ]
 }
@@ -496,6 +497,12 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
       break
     case "error":
       stopSpinner()
+      break
+    case "summary":
+      stopSpinner()
+      endReasoning()
+      endAssistantStream()
+      if (event.summary) infoLine(formatTaskSummary(event.summary))
       break
     default:
       break
@@ -849,7 +856,7 @@ async function handleCommand(
         return "handled"
       }
       if (kind === "voice") {
-        const voices = await elevenLabsVoices(current.apiKey).catch(async (error) => {
+        const voices = await elevenLabsVoices(config.elevenLabsKey()).catch(async (error) => {
           warnLine((error as Error).message)
           return elevenLabsVoices(undefined).catch(() => [])
         })
@@ -877,7 +884,7 @@ async function handleCommand(
         return "handled"
       }
       if (kind === "model") {
-        const models = await elevenLabsModels(current.apiKey)
+        const models = await elevenLabsModels(config.elevenLabsKey())
         if (!rest.length) {
           process.stdout.write(`\n  ${style.bold("Text to speech models")}\n`)
           models.forEach((model, index) => {

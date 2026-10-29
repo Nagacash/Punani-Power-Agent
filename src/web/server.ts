@@ -13,6 +13,7 @@ import { createSkillTools } from "../tool/skill.js"
 import { defaultRoots, discoverSkills, groupSkills, renderGroupIndex } from "../skills/loader.js"
 import { McpRegistry } from "../mcp/registry.js"
 import { buildSystemPrompt, describeProject, runAgentTurn, DEFAULT_MAX_STEPS } from "../agent/agent.js"
+import { formatTaskSummary } from "../agent/task-summary.js"
 import { modelKey } from "../provider/types.js"
 import { loadAlwaysOn, renderAlwaysOn } from "../agent/prompt.js"
 import { buildRoutes, renderRoutes } from "../skills/routing.js"
@@ -1186,7 +1187,17 @@ export class WebServer {
       case "settings-voices": {
         const { listVoices } = await import("../provider/elevenlabs.js")
         try {
-          const voices = await listVoices(body.key ? String(body.key) : undefined)
+          const fromBody = typeof body.key === "string" ? body.key.trim() : ""
+          const stored = this.config.elevenLabsKey() ?? ""
+          const apiKey = fromBody || stored
+          if (!apiKey) {
+            return json(
+              response,
+              { error: "no ElevenLabs API key yet. Save one under Settings → speech, then try again." },
+              400,
+            )
+          }
+          const voices = await listVoices(apiKey)
           return json(response, { voices })
         } catch (error) {
           return json(response, { error: (error as Error).message }, 400)
@@ -1332,7 +1343,7 @@ export class WebServer {
     // When the turn started, so the pane can tell what it made.
     const started = Date.now()
     const tools = [
-      ...buildTools(this.config.imageSettings(), this.config.audioSettings(), this.mcpTools),
+      ...buildTools(this.config.resolvedImageSettings(), this.config.resolvedAudioSettings(), this.mcpTools),
       ...this.skillTools,
     ]
     // A key the browser sent wins over the one on disk, so the browser can
@@ -1451,6 +1462,9 @@ export class WebServer {
           }
           if (event.type === "notice" && event.text) {
             this.hub.send({ type: "notice", text: event.text })
+          }
+          if (event.type === "summary" && event.summary) {
+            this.hub.send({ type: "notice", text: formatTaskSummary(event.summary) })
           }
         },
       },
