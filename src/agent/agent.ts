@@ -257,7 +257,13 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
   let cost = 0
   let switches = 0
   // What the turn actually did, so a skill's receipts can be checked.
-  const turn: TurnState = { loadedSkills: [], toolsUsed: new Set(), refused: new Set() }
+  const turn: TurnState = {
+    loadedSkills: [],
+    toolsUsed: new Set(),
+    refused: new Set(),
+    changed: [],
+    commands: [],
+  }
   // The messages this turn produced, for the session log.
   const added: ChatMessage[] = []
   // What each model call cost, so the transcript can say so per step.
@@ -527,7 +533,7 @@ async function runToolCall(
   // Keep track of what the turn actually did, so the end of the turn can
   // tell the user plainly what changed. A failure is not a change.
   if (result.meta?.path && !result.isError) {
-    turn.changed.push(result.meta.path)
+    turn.changed.push(String(result.meta.path))
   }
   if (call.name === "bash" && args.command && !result.isError) {
     turn.commands.push(String(args.command))

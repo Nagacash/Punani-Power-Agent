@@ -234,7 +234,7 @@ function loadProject(deps: AppDeps, root: string): Tool[] {
   }
 
   return [
-    ...buildTools(config.imageSettings(), config.audioSettings(), deps.mcpTools ?? []),
+    ...buildTools(config.resolvedImageSettings(), config.resolvedAudioSettings(), deps.mcpTools ?? []),
     ...createSkillTools(groups, skills),
   ]
 }
@@ -497,9 +497,29 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
     case "error":
       stopSpinner()
       break
+    case "summary":
+      stopSpinner()
+      endReasoning()
+      endAssistantStream()
+      if (event.summary) infoLine(formatTaskSummary(event.summary))
+      break
     default:
       break
   }
+}
+
+function formatTaskSummary(summary: { changed: string[]; commands: string[] }): string {
+  const parts: string[] = []
+  if (summary.changed.length > 0) {
+    const shown = summary.changed.slice(0, 3).join(", ")
+    const more = summary.changed.length > 3 ? ` (+${summary.changed.length - 3} more)` : ""
+    parts.push(`touched ${summary.changed.length} file(s): ${shown}${more}`)
+  }
+  if (summary.commands.length > 0) {
+    parts.push(`ran ${summary.commands.length} command(s)`)
+  }
+  if (parts.length === 0) return "Task complete (no file changes recorded)."
+  return `Task complete · ${parts.join(" · ")}`
 }
 
 /** Explain a provider failure and point at other models that could work. */
@@ -849,7 +869,7 @@ async function handleCommand(
         return "handled"
       }
       if (kind === "voice") {
-        const voices = await elevenLabsVoices(current.apiKey).catch(async (error) => {
+        const voices = await elevenLabsVoices(config.elevenLabsKey()).catch(async (error) => {
           warnLine((error as Error).message)
           return elevenLabsVoices(undefined).catch(() => [])
         })
@@ -877,7 +897,7 @@ async function handleCommand(
         return "handled"
       }
       if (kind === "model") {
-        const models = await elevenLabsModels(current.apiKey)
+        const models = await elevenLabsModels(config.elevenLabsKey())
         if (!rest.length) {
           process.stdout.write(`\n  ${style.bold("Text to speech models")}\n`)
           models.forEach((model, index) => {

@@ -62,8 +62,8 @@ export class Settings {
 
     const image = { ...stored.image }
     const audio = { ...stored.audio }
-    const imageHasKey = Boolean(image.apiKey)
-    const audioHasKey = Boolean(audio.apiKey)
+    const imageHasKey = Boolean(image.apiKey || stored.apiKeys.fal)
+    const audioHasKey = Boolean(stored.apiKeys.elevenlabs)
     delete (image as any).apiKey
     delete (audio as any).apiKey
 
@@ -151,7 +151,10 @@ export class Settings {
     if (input.timeoutSeconds !== undefined) next.timeoutSeconds = input.timeoutSeconds
     if (input.apiKey !== undefined) {
       const value = input.apiKey.trim()
-      if (value) next.apiKey = value
+      if (value) {
+        next.apiKey = value
+        if (next.provider === "none") next.provider = "openai-compatible"
+      }
     }
     this.config.setImageSettings(next)
     return { ok: true }
@@ -169,7 +172,10 @@ export class Settings {
     if (input.outputFormat !== undefined) next.outputFormat = input.outputFormat
     if (input.apiKey !== undefined) {
       const value = input.apiKey.trim()
-      if (value) next.apiKey = value
+      if (value) {
+        next.apiKey = value
+        if (next.provider === "none") next.provider = "elevenlabs"
+      }
     }
     this.config.setAudioSettings(next)
     return { ok: true }

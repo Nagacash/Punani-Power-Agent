@@ -21,17 +21,18 @@ Transcribe video or audio files using Whisper or ElevenLabs Scribe to produce wo
 - `write` - for writing transcript output
 
 ## Configuration
-This skill uses the `whisper` command-line tool or ElevenLabs Scribe API. Configure in `config.json`:
+This skill uses the `whisper` CLI or ElevenLabs (same key as speech). Store the key in `~/.config/punani-powerd/config.json`:
 
 ```json
 {
-  "transcribe": {
-    "provider": "whisper",        // or "elevenlabs-scribe"
-    "model": "base",              // whisper model: tiny, base, small, medium, large
-    "elevenlabsKey": "your-key"  // if using ElevenLabs Scribe
+  "audio": {
+    "provider": "elevenlabs",
+    "apiKey": "<your ElevenLabs key>"
   }
 }
 ```
+
+Or in the terminal: `/audio key <elevenlabs-key>` then `/audio voice`.
 
 ## Usage
 ```javascript

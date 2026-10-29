@@ -2147,7 +2147,17 @@
           if (image.provider === value) o.selected = true;
           backend.appendChild(o);
         }
+        const klingNote = document.createElement("p");
+        klingNote.className = "small";
+        klingNote.hidden = image.provider !== "kling";
+        klingNote.textContent =
+          "Kling uses the kling CLI on this machine (npm i -g @klingai/cli-global, then kling login). No API key field here.";
+        function syncKlingNote() {
+          klingNote.hidden = backend.value !== "kling";
+          imgKey.hidden = backend.value === "kling";
+        }
         backend.onchange = async () => {
+          syncKlingNote();
           await apiFetch("/api/settings-image", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -2191,14 +2201,19 @@
           await apiFetch("/api/settings-image", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ apiKey: imgKeyInput.value }),
+            body: JSON.stringify({
+              provider: backend.value === "none" ? "openai-compatible" : backend.value,
+              apiKey: imgKeyInput.value,
+            }),
           });
           imgKeyInput.value = "";
           await loadSettings();
         };
         imgKey.appendChild(imgKeyInput);
         imgKey.appendChild(saveImgKey);
+        img.appendChild(klingNote);
         img.appendChild(imgKey);
+        syncKlingNote();
         wrap.appendChild(img);
 
         const aud = document.createElement("div");
@@ -2256,7 +2271,7 @@
           await apiFetch("/api/settings-audio", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ apiKey: audKeyInput.value }),
+            body: JSON.stringify({ provider: "elevenlabs", apiKey: audKeyInput.value }),
           });
           audKeyInput.value = "";
           await loadSettings();

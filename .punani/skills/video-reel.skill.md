@@ -33,7 +33,7 @@ The reel creation is highly configurable in `config.json`:
     "duration": 60,                    // target duration in seconds
     "platform": "tiktok",              // tiktok, instagram, youtube, twitter
     "music": {
-      "provider": "elevenlabs",        // none, elevenlabs, fal, custom
+      "provider": "elevenlabs",        // uses config.audio ( /audio key ) — not a separate hardcoded key
       "style": "upbeat",                // mood/style for generated music
       "beatSync": true,                 // sync cuts to music beat
       "fadeInOut": true                // add fade transitions
@@ -45,7 +45,7 @@ The reel creation is highly configurable in `config.json`:
     },
     "motionGraphics": {
       "enabled": true,
-      "provider": "kling",              // kling, fal, none
+      "provider": "kling",              // uses config.image + `kling login` — not an inline API key
       "cardStyle": "default"            // default, dark-paper, glass-popout
     },
     "template": "default"               // template name from style-templates
