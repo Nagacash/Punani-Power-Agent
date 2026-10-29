@@ -48,6 +48,14 @@ function timestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)
 }
 
+function resolveImageOutputPath(outputDir: string, pathArg: string | undefined, defaultName: string): string {
+  if (!pathArg) return path.posix.join(outputDir, defaultName)
+  const name = pathArg.replace(/\\/g, "/").replace(/^\/+/, "")
+  if (name.startsWith(`${outputDir}/`) || name === outputDir) return name
+  if (name.includes("/")) return name
+  return path.posix.join(outputDir, name)
+}
+
 async function runCommand(
   command: string,
   args: string[],
@@ -81,6 +89,51 @@ function findUrl(text: string): string | undefined {
   return match?.[0]
 }
 
+function collectKlingUrls(payload: unknown): { clean: string[]; watermarked: string[] } {
+  const clean: string[] = []
+  const watermarked: string[] = []
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== "object") return
+    if (Array.isArray(node)) {
+      for (const entry of node) visit(entry)
+      return
+    }
+    const record = node as Record<string, unknown>
+    const without =
+      (typeof record.url_without_watermark === "string" && record.url_without_watermark) ||
+      (typeof record.urlWithoutWatermark === "string" && record.urlWithoutWatermark)
+    if (without) clean.push(without)
+    const url = record.url
+    if (typeof url === "string" && /^https?:\/\//.test(url)) watermarked.push(url)
+    for (const value of Object.values(record)) visit(value)
+  }
+  visit(payload)
+  return { clean, watermarked }
+}
+
+function cleanUrlFromStdout(stdout: string): string | undefined {
+  const patterns = [
+    /"url_without_watermark"\s*:\s*"(https?:[^"\\]+)"/,
+    /"urlWithoutWatermark"\s*:\s*"(https?:[^"\\]+)"/,
+  ]
+  for (const pattern of patterns) {
+    const match = stdout.match(pattern)
+    if (match?.[1]) return match[1]
+  }
+  return undefined
+}
+
+/** Prefer Kling's watermark-free URL when the CLI provides it (incl. polled `generations[].result.works`). */
+export function pickKlingAssetUrl(payload: any, stdout: string): { url: string; watermarkFree: boolean } | undefined {
+  const { clean, watermarked } = collectKlingUrls(payload)
+  const fromStdout = cleanUrlFromStdout(stdout)
+  if (fromStdout) return { url: fromStdout, watermarkFree: true }
+  if (clean[0]) return { url: clean[0], watermarkFree: true }
+  if (watermarked[0]) return { url: watermarked[0], watermarkFree: false }
+  const fallback = findUrl(stdout)
+  return fallback ? { url: fallback, watermarkFree: false } : undefined
+}
+
 async function download(url: string): Promise<Buffer> {
   const response = await fetch(url)
   if (!response.ok) throw new ToolError(`could not download the image: HTTP ${response.status}`)
@@ -92,7 +145,7 @@ async function generateWithKling(
   settings: ImageSettings,
   prompt: string,
   destination: string,
-): Promise<{ credits?: number; model: string }> {
+): Promise<{ credits?: number; model: string; watermarkFree: boolean }> {
   const model = settings.model
   if (!model) {
     throw new ToolError(
@@ -132,19 +185,20 @@ async function generateWithKling(
     payload = undefined
   }
 
-  const url =
-    payload?.works?.find((work: any) => work?.url)?.url ??
-    payload?.works?.[0]?.url ??
-    findUrl(result.stdout)
-  if (!url) {
+  const picked = pickKlingAssetUrl(payload, result.stdout)
+  if (!picked) {
     throw new ToolError(
       `the kling CLI did not return an image URL. Output: ${result.stdout.trim().slice(0, 300) || "(empty)"}`,
     )
   }
 
-  const bytes = await download(url)
+  const bytes = await download(picked.url)
   await diskMutate({ path: destination, content: bytes.toString("base64"), encoding: "base64" })
-  return { model, credits: payload?.creditsConsumed }
+  return {
+    model,
+    credits: payload?.creditsConsumed,
+    watermarkFree: picked.watermarkFree,
+  }
 }
 
 /** Any OpenAI-compatible image endpoint. */
@@ -197,7 +251,7 @@ async function generateWithOpenAI(
 }
 
 /** The image tool. */
-export function createImageTool(settings: ImageSettings): Tool {
+export function createImageTool(getSettings: () => ImageSettings): Tool {
   return {
     name: "image",
     description:
@@ -214,6 +268,7 @@ export function createImageTool(settings: ImageSettings): Tool {
       required: ["prompt"],
     },
     async run(args: any, context: ToolContext): Promise<ToolResult> {
+      const settings = getSettings()
       const prompt = String(args.prompt ?? "").trim()
       if (!prompt) throw new ToolError("prompt must not be empty")
       if (!settings.provider || settings.provider === "none") {
@@ -224,8 +279,11 @@ export function createImageTool(settings: ImageSettings): Tool {
       }
 
       const outputDir = settings.outputDir ?? DEFAULT_OUTPUT_DIR
-      const name = args.path ? String(args.path) : `${slugify(prompt)}-${timestamp()}.png`
-      const relative = path.posix.join(outputDir, name)
+      const relative = resolveImageOutputPath(
+        outputDir,
+        args.path ? String(args.path) : undefined,
+        `${slugify(prompt)}-${timestamp()}.png`,
+      )
       const target = ensureInsideProject(context.projectRoot, relative)
 
       const outcome = await context.requestPermission({
@@ -241,8 +299,11 @@ export function createImageTool(settings: ImageSettings): Tool {
 
       if (settings.provider === "kling") {
         const result = await generateWithKling(settings, prompt, target.absolute)
+        const wmNote = result.watermarkFree
+          ? ""
+          : " Note: Kling did not return a watermark-free URL for this account; upgrade/credits may be required for clean exports."
         return {
-          output: `Generated ${relative} with Kling (${result.model}).`,
+          output: `Generated ${relative} with Kling (${result.model}).${wmNote}`,
           meta: { path: relative, provider: "kling", model: result.model },
         }
       }

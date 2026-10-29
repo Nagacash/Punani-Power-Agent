@@ -19,7 +19,10 @@ import { log } from "../core/logger.js"
  *      frontends edit one file.
  */
 
+export type MediaKeySlot = (typeof MEDIA_API_KEY_IDS)[number]
+
 export interface SettingsView {
+  mediaKeys: Record<MediaKeySlot, { hasDiskKey: boolean }>
   providers: {
     id: string
     name: string
@@ -62,17 +65,25 @@ export class Settings {
 
     const image = { ...stored.image }
     const audio = { ...stored.audio }
+    const mk = stored.mediaKeys ?? {}
     const imageHasKey =
       image.provider === "kling"
-        ? Boolean(stored.apiKeys.kling)
+        ? Boolean(mk.kling)
         : image.provider === "openai-compatible"
-          ? Boolean(stored.apiKeys.fal)
+          ? Boolean(mk.fal)
           : false
-    const audioHasKey = Boolean(stored.apiKeys.elevenlabs)
+    const audioHasKey = Boolean(mk.elevenlabs)
     delete (image as any).apiKey
     delete (audio as any).apiKey
 
+    const mediaKeys = {
+      elevenlabs: { hasDiskKey: Boolean(mk.elevenlabs) },
+      kling: { hasDiskKey: Boolean(mk.kling) },
+      fal: { hasDiskKey: Boolean(mk.fal) },
+    } satisfies Record<MediaKeySlot, { hasDiskKey: boolean }>
+
     return {
+      mediaKeys,
       providers,
       image: { ...image, hasKey: imageHasKey },
       audio: { ...audio, hasKey: audioHasKey },
@@ -172,7 +183,8 @@ export class Settings {
     if (!MEDIA_API_KEY_IDS.includes(id)) return { ok: false, error: `unknown media key "${id}"` }
     const value = key.trim()
     if (!value) return { ok: false, error: "the key was empty" }
-    this.config.setMediaKey(id, value)
+    const result = this.config.setMediaKey(id, value)
+    if (!result.ok) return result
     log.info(`settings: stored media key ${id}`)
     return { ok: true }
   }

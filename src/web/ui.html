@@ -236,7 +236,8 @@
 
       .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
       .gallery figure { margin: 0; border-radius: 12px; overflow: hidden; border: 1px solid var(--hair); background: #000; }
-      .gallery img, .gallery audio { width: 100%; display: block; }
+      .gallery img, .gallery video, .gallery audio { width: 100%; display: block; }
+      .gallery video { max-height: 140px; object-fit: contain; background: #000; }
       .gallery audio { height: 34px; }
       .gallery figcaption { padding: 6px 8px; font: 10px/1.4 var(--mono); color: var(--paper-faint); word-break: break-all; }
       .gallery .none { grid-column: 1 / -1; color: var(--paper-faint); font: 11px/1.5 var(--mono); padding: 4px 0; }
@@ -316,7 +317,7 @@
       .diff .row.ctx { color: var(--paper-faint); }
 
       .shot { border-top: 1px solid var(--hair-soft); padding: 12px 14px; }
-      .shot img { max-width: 100%; max-height: 440px; border-radius: 12px; display: block; border: 1px solid var(--hair); }
+      .shot img, .shot video { max-width: 100%; max-height: 440px; border-radius: 12px; display: block; border: 1px solid var(--hair); object-fit: contain; background: #000; }
       .shot audio { width: 100%; }
       .shot .cap { margin-top: 8px; font: 10px/1.4 var(--mono); color: var(--paper-faint); word-break: break-all; }
 
@@ -529,7 +530,16 @@
       }
       .pane .bar .url:focus { outline: none; color: var(--paper); }
       .pane iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: #000; }
-      .pane iframe[hidden], .pane .blank[hidden] { display: none; }
+      .pane iframe[hidden], .pane .blank[hidden], .pane .media-view[hidden] { display: none; }
+      .pane .media-view {
+        flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+        padding: 12px; background: #000; overflow: auto;
+      }
+      .pane .media-view img, .pane .media-view video {
+        max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px;
+      }
+      .pane .media-view audio { width: min(100%, 28rem); }
+      .pane .media-view .err { color: var(--paper-faint); font: 12px/1.5 var(--mono); white-space: pre-wrap; padding: 12px; }
       .pane .blank { flex: 1; display: grid; place-items: center; padding: 30px; text-align: center; }
       .pane .blank p { color: var(--paper-faint); font: 12.5px/1.7 var(--mono); max-width: 340px; }
       .pane .blank h4 { margin: 0 0 10px; font: 600 10px/1 var(--mono); letter-spacing: 0.24em; text-transform: uppercase; color: var(--gold-dim); }
@@ -670,6 +680,7 @@
                 <div class="tags" id="preview-dev-links" hidden></div>
               </div>
             </div>
+            <div class="media-view" id="preview-media" hidden></div>
             <iframe id="preview-frame" title="preview" hidden></iframe>
           </div>
         </div>
@@ -785,16 +796,52 @@
          State
          ------------------------------------------------------------------ */
       const STORAGE_KEY = "punani.keys";
+      const MEDIA_KEY_SLOTS = ["elevenlabs", "kling", "fal"];
+
+      function mediaStorageId(apiId) {
+        return `media:${apiId}`;
+      }
+
+      /** Drop legacy top-level media ids and duplicated speech/image keys. */
+      function migrateBrowserKeys(raw) {
+        const keys = raw && typeof raw === "object" ? { ...raw } : {};
+        for (const id of MEDIA_KEY_SLOTS) {
+          const slot = mediaStorageId(id);
+          const legacy = keys[id];
+          if (typeof legacy === "string" && legacy.length > 0 && !keys[slot]) keys[slot] = legacy;
+          delete keys[id];
+        }
+        const speech = keys[mediaStorageId("elevenlabs")];
+        if (speech) {
+          for (const id of ["kling", "fal"]) {
+            const slot = mediaStorageId(id);
+            if (keys[slot] === speech) delete keys[slot];
+          }
+        }
+        return keys;
+      }
 
       /** Keys the user chose to keep in the browser instead of on disk. */
       function loadBrowserKeys() {
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
           const parsed = raw ? JSON.parse(raw) : {};
-          return parsed && typeof parsed === "object" ? parsed : {};
+          return migrateBrowserKeys(parsed);
         } catch {
           return {};
         }
+      }
+
+      /** Provider keys stay as-is; media keys use `media:*` in storage but flat ids in the header. */
+      function keysForRequest(browserKeys) {
+        const out = { ...browserKeys };
+        for (const id of MEDIA_KEY_SLOTS) {
+          const slot = mediaStorageId(id);
+          const value = out[slot];
+          if (typeof value === "string" && value.length > 0) out[id] = value;
+          delete out[slot];
+        }
+        return out;
       }
 
       function saveBrowserKeys(keys) {
@@ -805,13 +852,16 @@
         }
       }
 
+      const initialBrowserKeys = loadBrowserKeys();
+      saveBrowserKeys(initialBrowserKeys);
+
       const store = createStore((set, get) => ({
         busy: false,
         usage: { inputTokens: 0, outputTokens: 0, cost: 0 },
         previewMode: "off",
         settingsTab: "providers",
         providerFilter: "",
-        browserKeys: loadBrowserKeys(),
+        browserKeys: initialBrowserKeys,
         models: [],
         set,
         get,
@@ -824,7 +874,7 @@
       /** Every request carries the browser-held keys, so the server can use them. */
       function apiFetch(path, options = {}) {
         const headers = new Headers(options.headers || {});
-        const keys = store.getState().browserKeys;
+        const keys = keysForRequest(store.getState().browserKeys);
         if (Object.keys(keys).length > 0) {
           headers.set("x-punani-keys", JSON.stringify(keys));
         }
@@ -1019,7 +1069,123 @@
        * SecurityError. Same origin, reload the page it is on. Cross origin,
        * re-assign the source, which reloads it the same way.
        */
+      function mediaKindFromPath(filePath) {
+        const lower = String(filePath || "").toLowerCase();
+        if (/\.(mp4|webm|mov)(\?|$)/.test(lower)) return "video";
+        if (/\.(mp3|wav|m4a|ogg)(\?|$)/.test(lower)) return "audio";
+        return "image";
+      }
+
+      function withMediaSessionToken(url) {
+        const t = window.__PUNANI_MEDIA_TOKEN;
+        if (!t) return url;
+        const u = new URL(url, window.location.origin);
+        if (!u.searchParams.has("t")) u.searchParams.set("t", t);
+        return u.pathname + u.search;
+      }
+
+      /** Open project media in a tab (raw /file for video/audio; wrapper for images). */
+      function mediaViewerUrl(relativePath) {
+        const p = String(relativePath || "").replace(/^\/+/, "");
+        const kind = mediaKindFromPath(p);
+        const base =
+          kind === "video" || kind === "audio"
+            ? "/file?path=" + encodeURIComponent(p)
+            : "/file/view?path=" + encodeURIComponent(p);
+        return withMediaSessionToken(base);
+      }
+
+      /** Turn preview-bar text into a URL that opens in a new tab (fixes bare project paths). */
+      function resolvePreviewOpenUrl(raw) {
+        const target = String(raw || "").trim();
+        if (!target) return null;
+        if (target.startsWith("http://") || target.startsWith("https://")) return target;
+        if (target.startsWith("/file/view") || target.startsWith("/file?")) {
+          return window.location.origin + withMediaSessionToken(target);
+        }
+        if (target.startsWith("/")) return window.location.origin + target;
+        return window.location.origin + mediaViewerUrl(target);
+      }
+
+      let previewMediaObjectUrl = null;
+
+      function revokePreviewMediaUrl() {
+        if (previewMediaObjectUrl) {
+          URL.revokeObjectURL(previewMediaObjectUrl);
+          previewMediaObjectUrl = null;
+        }
+      }
+
+      async function loadPreviewMediaFile(relativePath) {
+        const box = $("preview-media");
+        if (!box) return;
+        box.innerHTML = `<div class="err">Loading…</div>`;
+        revokePreviewMediaUrl();
+        const clean = String(relativePath || "").replace(/^\/+/, "");
+        if (!clean) {
+          box.innerHTML = `<div class="err">No file path.</div>`;
+          return;
+        }
+        const res = await fetch("/file?path=" + encodeURIComponent(clean), { credentials: "same-origin" });
+        if (!res.ok) {
+          box.innerHTML = `<div class="err">${esc(await res.text())}</div>`;
+          return;
+        }
+        const buf = await res.arrayBuffer();
+        const headerType = res.headers.get("content-type") || "";
+        const kind = mediaKindFromPath(clean);
+        const mime =
+          headerType.split(";")[0].trim() ||
+          (kind === "video" ? "video/mp4" : kind === "audio" ? "audio/mpeg" : "application/octet-stream");
+        const blob = new Blob([buf], { type: mime });
+        previewMediaObjectUrl = URL.createObjectURL(blob);
+        box.innerHTML = "";
+        appendMediaPreview(box, previewMediaObjectUrl, clean, "");
+      }
+
+      function appendMediaPreview(container, src, filePath, provider) {
+        const kind =
+          provider === "elevenlabs" ? "audio" : mediaKindFromPath(filePath);
+        if (kind === "video") {
+          const video = document.createElement("video");
+          video.controls = true;
+          video.playsInline = true;
+          video.preload = "auto";
+          if (String(src).startsWith("blob:")) {
+            video.src = src;
+          } else {
+            const source = document.createElement("source");
+            source.src = src;
+            source.type = "video/mp4";
+            video.appendChild(source);
+          }
+          video.addEventListener("error", () => {
+            const hint = document.createElement("div");
+            hint.className = "err";
+            hint.textContent =
+              "This clip did not play in the preview. Use Open in tab, or open the file in QuickTime/VLC.";
+            if (!container.querySelector(".err")) container.appendChild(hint);
+          });
+          container.appendChild(video);
+        } else if (kind === "audio") {
+          const audio = document.createElement("audio");
+          audio.controls = true;
+          audio.src = src;
+          container.appendChild(audio);
+        } else {
+          const img = document.createElement("img");
+          img.src = src;
+          img.alt = filePath;
+          container.appendChild(img);
+        }
+      }
+
       function reloadFrame() {
+        if (previewMode === "file") {
+          const path = $("preview-url").value.trim();
+          if (path) void loadPreviewMediaFile(path);
+          return;
+        }
         const frame = $("preview-frame");
         const src = frame.getAttribute("src");
         if (!src) return;
@@ -1107,17 +1273,7 @@
           const wrap = document.createElement("div");
           wrap.className = "shot";
           const src = "/file?path=" + encodeURIComponent(meta.path);
-          if (meta.provider === "elevenlabs") {
-            const audio = document.createElement("audio");
-            audio.controls = true;
-            audio.src = src;
-            wrap.appendChild(audio);
-          } else {
-            const img = document.createElement("img");
-            img.src = src;
-            img.alt = meta.path;
-            wrap.appendChild(img);
-          }
+          appendMediaPreview(wrap, src, meta.path, meta.provider);
           const cap = document.createElement("div");
           cap.className = "cap";
           cap.textContent = meta.path;
@@ -1260,17 +1416,7 @@
         for (const m of media.slice(-6).reverse()) {
           const fig = document.createElement("figure");
           const src = "/file?path=" + encodeURIComponent(m.path);
-          if (m.provider === "elevenlabs") {
-            const audio = document.createElement("audio");
-            audio.controls = true;
-            audio.src = src;
-            fig.appendChild(audio);
-          } else {
-            const img = document.createElement("img");
-            img.src = src;
-            img.alt = m.path;
-            fig.appendChild(img);
-          }
+          appendMediaPreview(fig, src, m.path, m.provider);
           const cap = document.createElement("figcaption");
           cap.textContent = m.path.split("/").pop();
           fig.appendChild(cap);
@@ -1511,22 +1657,29 @@
         shell.classList.toggle("preview", state.mode !== "off");
         shell.classList.toggle("preview-mobile", state.mode !== "off");
         const frame = $("preview-frame");
+        const media = $("preview-media");
         const blank = $("preview-blank");
         if (state.mode === "off") {
           frame.hidden = true;
+          media.hidden = true;
           blank.hidden = false;
+          revokePreviewMediaUrl();
           return;
         }
         blank.hidden = true;
+        if (state.mode === "file" && state.file) {
+          frame.hidden = true;
+          media.hidden = false;
+          $("preview-url").value = state.file;
+          void loadPreviewMediaFile(state.file);
+          return;
+        }
+        media.hidden = true;
+        revokePreviewMediaUrl();
         frame.hidden = false;
-        const target =
-          state.mode === "url"
-            ? state.url
-            : state.mode === "file"
-              ? "/file?path=" + encodeURIComponent(state.file || "")
-              : "/preview/";
+        const target = state.mode === "url" ? state.url : "/preview/";
         if (frame.getAttribute("src") !== target) frame.setAttribute("src", target);
-        $("preview-url").value = state.mode === "file" ? state.file || target : target;
+        $("preview-url").value = target;
       }
 
       async function setPreview(mode, url) {
@@ -1557,9 +1710,8 @@
       };
       $("preview-reload").onclick = () => reloadFrame();
       $("preview-external").onclick = () => {
-        const target = $("preview-url").value.trim();
-        if (target.startsWith("http")) openDevTab(target);
-        else if (target.startsWith("/")) openDevTab(window.location.origin + target);
+        const url = resolvePreviewOpenUrl($("preview-url").value);
+        if (url) window.open(url, "_blank", "noopener,noreferrer");
       };
       $("preview-url").addEventListener("keydown", (e) => {
         if (e.key !== "Enter") return;
@@ -2129,11 +2281,18 @@
       }
 
 
-      /** Speech / image API keys: separate slots (elevenlabs, kling, fal) with browser or disk storage. */
-      function mediaKeyField(id, label, hasDiskKey) {
+      /** Speech / image API keys: separate slots with browser or disk storage. */
+      function mediaKeyField(apiId, title, hasDiskKey) {
+        const storageId = mediaStorageId(apiId);
+        const wrap = document.createElement("div");
+        wrap.className = "media-key-block";
+        const heading = document.createElement("div");
+        heading.className = "sub";
+        heading.textContent = title;
+        wrap.appendChild(heading);
         const field = document.createElement("div");
         field.className = "field";
-        const inBrowser = Object.prototype.hasOwnProperty.call(store.getState().browserKeys, id);
+        const inBrowser = Object.prototype.hasOwnProperty.call(store.getState().browserKeys, storageId);
         const where = document.createElement("select");
         for (const [value, text] of [["disk", "on this machine"], ["browser", "in the browser"]]) {
           const o = document.createElement("option");
@@ -2144,35 +2303,57 @@
         }
         const input = document.createElement("input");
         input.type = "password";
-        input.autocomplete = "off";
+        input.id = `media-key-${apiId}`;
+        input.name = storageId;
+        input.autocomplete = "new-password";
+        input.setAttribute("data-1p-ignore", "true");
+        input.setAttribute("data-lpignore", "true");
         input.placeholder = inBrowser
-          ? `${label} key in browser — type to replace`
+          ? `${title} — key in this browser only`
           : hasDiskKey
-            ? `${label} key on disk — type to replace`
-            : `${label} API key`;
+            ? `${title} — key on disk, type to replace`
+            : `${title} API key`;
         const save = document.createElement("button");
         save.className = "pill gold";
         save.innerHTML = `<span class="orb">✓</span>Save key`;
         async function persist(value) {
-          const keys = { ...store.getState().browserKeys };
+          let keys = { ...store.getState().browserKeys };
+          if (apiId === "elevenlabs") {
+            for (const other of ["kling", "fal"]) {
+              const slot = mediaStorageId(other);
+              if (keys[slot] === value) delete keys[slot];
+            }
+          }
           if (where.value === "browser") {
-            keys[id] = value;
+            keys[storageId] = value;
             saveBrowserKeys(keys);
             setState({ browserKeys: keys });
-            await apiFetch("/api/settings-media-key-clear", {
+            const res = await apiFetch("/api/settings-media-key-clear", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ id }),
+              body: JSON.stringify({ id: apiId }),
             });
+            const data = await res.json().catch(() => ({}));
+            if (data.error) {
+              info(data.error);
+              return;
+            }
+            info(`Saved ${title} key in this browser.`);
           } else {
-            delete keys[id];
+            delete keys[storageId];
             saveBrowserKeys(keys);
             setState({ browserKeys: keys });
-            await apiFetch("/api/settings-media-key", {
+            const res = await apiFetch("/api/settings-media-key", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ id, key: value }),
+              body: JSON.stringify({ id: apiId, key: value }),
             });
+            const data = await res.json();
+            if (data.error) {
+              info(data.error);
+              return;
+            }
+            info(`Saved ${title} key on this machine.`);
           }
           input.value = "";
           await loadSettings();
@@ -2182,10 +2363,10 @@
           const value = input.value.trim();
           input.placeholder =
             where.value === "browser"
-              ? `${label} key in browser — type to replace`
+              ? `${title} — key in this browser only`
               : hasDiskKey
-                ? `${label} key on disk — type to replace`
-                : `${label} API key`;
+                ? `${title} — key on disk, type to replace`
+                : `${title} API key`;
           if (value) await persist(value);
         };
         save.onclick = async () => {
@@ -2202,13 +2383,13 @@
           clear.innerHTML = `<span class="orb">✕</span>Remove`;
           clear.onclick = async () => {
             const keys = { ...store.getState().browserKeys };
-            delete keys[id];
+            delete keys[storageId];
             saveBrowserKeys(keys);
             setState({ browserKeys: keys });
             await apiFetch("/api/settings-media-key-clear", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ id }),
+              body: JSON.stringify({ id: apiId }),
             });
             input.value = "";
             await loadSettings();
@@ -2217,13 +2398,94 @@
           field.appendChild(clear);
         }
         field.append(where, input, save);
-        return field;
+        wrap.appendChild(field);
+        return wrap;
       }
 
       function mediaTab() {
         const wrap = document.createElement("div");
         const image = settingsData.image;
         const audio = settingsData.audio;
+        const mk = settingsData.mediaKeys ?? {};
+
+        const aud = document.createElement("div");
+        aud.className = "row-card";
+        aud.innerHTML = `<div class="top"><span class="nm">speech</span>
+          <span class="tag ${audio.provider === "none" ? "warn" : "ok"}">${esc(audio.provider)}</span>
+          ${audio.voiceName ? `<span class="tag">${esc(audio.voiceName)}</span>` : ""}</div>`;
+        const audField = document.createElement("div");
+        audField.className = "field";
+        const audBackend = document.createElement("select");
+        for (const [value, label] of [["none", "off"], ["elevenlabs", "ElevenLabs"]]) {
+          const o = document.createElement("option");
+          o.value = value; o.textContent = label;
+          if (audio.provider === value) o.selected = true;
+          audBackend.appendChild(o);
+        }
+        audBackend.onchange = async () => {
+          await apiFetch("/api/settings-audio", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider: audBackend.value }),
+          });
+          await loadSettings();
+        };
+        const audModel = document.createElement("input");
+        audModel.value = audio.model ?? "";
+        audModel.placeholder = "e.g. eleven_multilingual_v2 (optional)";
+        const saveAud = document.createElement("button");
+        saveAud.className = "pill gold";
+        saveAud.innerHTML = `<span class="orb">✓</span>Save`;
+        saveAud.onclick = async () => {
+          await apiFetch("/api/settings-audio", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider: audBackend.value, model: audModel.value }),
+          });
+          await loadSettings();
+        };
+        audField.appendChild(audBackend);
+        audField.appendChild(audModel);
+        audField.appendChild(saveAud);
+        aud.appendChild(audField);
+
+        const audKey = mediaKeyField(
+          "elevenlabs",
+          "ElevenLabs (speech only)",
+          Boolean(mk.elevenlabs?.hasDiskKey),
+        );
+        const audKeyInput = audKey.querySelector("input");
+        const listVoices = document.createElement("button");
+        listVoices.className = "pill";
+        listVoices.innerHTML = `<span class="orb">☰</span>Voices`;
+        listVoices.onclick = async () => {
+          const res = await apiFetch("/api/settings-voices", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ key: audKeyInput.value.trim() || undefined }),
+          });
+          const data = await res.json();
+          if (data.error) { info(data.error); return; }
+          const box = document.createElement("div");
+          box.className = "list-pick";
+          for (const voice of data.voices.slice(0, 40)) {
+            const b = document.createElement("button");
+            b.textContent = voice.name;
+            b.onclick = async () => {
+              await apiFetch("/api/settings-audio", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ voiceId: voice.voiceId, voiceName: voice.name }),
+              });
+              await loadSettings();
+            };
+            box.appendChild(b);
+          }
+          aud.appendChild(box);
+        };
+        audKey.querySelector(".field").appendChild(listVoices);
+        aud.appendChild(audKey);
+        wrap.appendChild(aud);
 
         const img = document.createElement("div");
         img.className = "row-card";
@@ -2238,22 +2500,20 @@
           if (image.provider === value) o.selected = true;
           backend.appendChild(o);
         }
-        const klingNote = document.createElement("p");
-        klingNote.className = "small";
-        klingNote.hidden = image.provider !== "kling";
-        klingNote.textContent =
-          "Kling images use the kling CLI on this machine (npm i -g @klingai/cli-global, then kling login). Store a Kling API key separately below if you use Kling MCP or other API tools — it never shares the ElevenLabs key.";
-        const klingKeyWrap = mediaKeyField("kling", "Kling", image.provider === "kling" && image.hasKey);
+        const klingKeyWrap = mediaKeyField(
+          "kling",
+          "Kling (images / MCP — not ElevenLabs)",
+          Boolean(mk.kling?.hasDiskKey),
+        );
         klingKeyWrap.hidden = image.provider !== "kling";
         const falKeyWrap = mediaKeyField(
           "fal",
-          "Image (OpenAI-compatible)",
-          image.provider === "openai-compatible" && image.hasKey,
+          "Image API (OpenAI-compatible)",
+          Boolean(mk.fal?.hasDiskKey),
         );
         falKeyWrap.hidden = image.provider !== "openai-compatible";
         function syncImageKeys() {
           const mode = backend.value;
-          klingNote.hidden = mode !== "kling";
           klingKeyWrap.hidden = mode !== "kling";
           falKeyWrap.hidden = mode !== "openai-compatible";
         }
@@ -2288,86 +2548,10 @@
         imgField.appendChild(url);
         imgField.appendChild(saveImg);
         img.appendChild(imgField);
-        img.appendChild(klingNote);
         img.appendChild(klingKeyWrap);
         img.appendChild(falKeyWrap);
         syncImageKeys();
         wrap.appendChild(img);
-
-        const aud = document.createElement("div");
-        aud.className = "row-card";
-        aud.innerHTML = `<div class="top"><span class="nm">speech</span>
-          <span class="tag ${audio.provider === "none" ? "warn" : "ok"}">${esc(audio.provider)}</span>
-          ${audio.voiceName ? `<span class="tag">${esc(audio.voiceName)}</span>` : ""}</div>`;
-        const audField = document.createElement("div");
-        audField.className = "field";
-        const audBackend = document.createElement("select");
-        for (const [value, label] of [["none", "off"], ["elevenlabs", "ElevenLabs"]]) {
-          const o = document.createElement("option");
-          o.value = value; o.textContent = label;
-          if (audio.provider === value) o.selected = true;
-          audBackend.appendChild(o);
-        }
-        audBackend.onchange = async () => {
-          await apiFetch("/api/settings-audio", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ provider: audBackend.value }),
-          });
-          await loadSettings();
-        };
-        const audModel = document.createElement("input");
-        audModel.value = audio.model ?? "";
-        audModel.placeholder = "model id";
-        const saveAud = document.createElement("button");
-        saveAud.className = "pill gold";
-        saveAud.innerHTML = `<span class="orb">✓</span>Save`;
-        saveAud.onclick = async () => {
-          await apiFetch("/api/settings-audio", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ provider: audBackend.value, model: audModel.value }),
-          });
-          await loadSettings();
-        };
-        audField.appendChild(audBackend);
-        audField.appendChild(audModel);
-        audField.appendChild(saveAud);
-        aud.appendChild(audField);
-
-        const audKey = mediaKeyField("elevenlabs", "ElevenLabs", audio.hasKey);
-        const audKeyInput = audKey.querySelector("input");
-        const listVoices = document.createElement("button");
-        listVoices.className = "pill";
-        listVoices.innerHTML = `<span class="orb">☰</span>Voices`;
-        listVoices.onclick = async () => {
-          const res = await apiFetch("/api/settings-voices", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ key: audKeyInput.value.trim() || undefined }),
-          });
-          const data = await res.json();
-          if (data.error) { info(data.error); return; }
-          const box = document.createElement("div");
-          box.className = "list-pick";
-          for (const voice of data.voices.slice(0, 40)) {
-            const b = document.createElement("button");
-            b.textContent = voice.name;
-            b.onclick = async () => {
-              await apiFetch("/api/settings-audio", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ voiceId: voice.voiceId, voiceName: voice.name }),
-              });
-              await loadSettings();
-            };
-            box.appendChild(b);
-          }
-          aud.appendChild(box);
-        };
-        audKey.appendChild(listVoices);
-        aud.appendChild(audKey);
-        wrap.appendChild(aud);
         return wrap;
       }
 

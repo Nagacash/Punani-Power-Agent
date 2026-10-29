@@ -28,7 +28,7 @@ import { messageText, type ChatMessage, type ContentPart } from "../llm/client.j
 import type { ModelInfo } from "../provider/types.js"
 import type { Tool, ToolContext } from "../tool/types.js"
 import { EventHub, PermissionQueue } from "./events.js"
-import { PreviewServer } from "./preview.js"
+import { PreviewServer, mediaKindForFilename, mimeForFilename } from "./preview.js"
 import { devPreviewTargets } from "./dev-preview.js"
 import { listWebInstances, nextTaskLabel, registerWebInstance, unregisterWebInstance } from "./instances.js"
 import { spawnTaskWindow } from "./spawn-task.js"
@@ -487,8 +487,13 @@ export class WebServer {
       return
     }
 
+    if (url.pathname === "/file/view") {
+      this.sendMediaViewer(response, url)
+      return
+    }
+
     if (url.pathname === "/file") {
-      this.sendFile(response, url)
+      this.sendFile(request, response, url)
       return
     }
 
@@ -850,40 +855,143 @@ export class WebServer {
    * The path is resolved and checked to be inside the project root, so this
    * cannot be used to read files elsewhere on the machine.
    */
-  private sendFile(response: http.ServerResponse, url: URL): void {
-    const requested = url.searchParams.get("path") ?? ""
-    const target = path.resolve(this.projectRoot, requested)
-    const relative = path.relative(this.projectRoot, target)
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      response.writeHead(403, { "content-type": "text/plain" })
-      response.end("forbidden")
-      return
+  /** Normalize ?path= from the UI (no leading slash, collapse duplicate output folders). */
+  private normalizeFileQueryPath(requested: string): string {
+    let relative = requested.replace(/\\/g, "/").replace(/^\/+/, "").trim()
+    while (relative.includes("assets/generated/assets/generated/")) {
+      relative = relative.replace("assets/generated/assets/generated/", "assets/generated/")
     }
-    // A link inside the project that points out of it is not inside it.
+    while (relative.includes("assets/audio/assets/audio/")) {
+      relative = relative.replace("assets/audio/assets/audio/", "assets/audio/")
+    }
+    return relative
+  }
+
+  /** Resolve a project-relative path from a query param; rejects escapes. */
+  private resolveProjectFile(requested: string): { relative: string; absolute: string } | undefined {
+    const normalized = this.normalizeFileQueryPath(requested)
+    if (!normalized) return undefined
+    const target = path.resolve(this.projectRoot, normalized)
+    const relative = path.relative(this.projectRoot, target)
+    if (relative.startsWith("..") || path.isAbsolute(relative)) return undefined
     const realRoot = this.realPath(this.projectRoot)
     const realTarget = this.realPath(target)
-    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
+    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) return undefined
+    const posix = relative.split(path.sep).join("/")
+    return { relative: posix, absolute: target }
+  }
+
+  private fileNotFoundMessage(relative: string): string {
+    return (
+      `not found: ${relative}\n` +
+      `(project root: ${this.projectRoot}\n` +
+      `Use the same folder in Punani that contains this file, or regenerate the asset here.)`
+    )
+  }
+
+  private sendFile(request: http.IncomingMessage, response: http.ServerResponse, url: URL): void {
+    const requested = url.searchParams.get("path") ?? ""
+    const resolved = this.resolveProjectFile(requested)
+    if (!resolved) {
       response.writeHead(403, { "content-type": "text/plain" })
       response.end("forbidden")
       return
     }
     let bytes: Buffer
     try {
-      bytes = fs.readFileSync(target)
+      bytes = fs.readFileSync(resolved.absolute)
     } catch {
-      response.writeHead(404, { "content-type": "text/plain" })
-      response.end("not found")
+      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+      response.end(this.fileNotFoundMessage(resolved.relative))
       return
     }
-    const type = target.endsWith(".png")
-      ? "image/png"
-      : target.endsWith(".jpg") || target.endsWith(".jpeg")
-        ? "image/jpeg"
-        : target.endsWith(".webp")
-          ? "image/webp"
-          : "application/octet-stream"
-    response.writeHead(200, { "content-type": type, "cache-control": "no-store" })
+    const type = mimeForFilename(resolved.absolute)
+    const size = bytes.length
+    const baseHeaders: Record<string, string | number> = {
+      "content-type": type,
+      "accept-ranges": "bytes",
+      "cache-control": "no-store",
+    }
+    if (type.startsWith("video/") || type.startsWith("audio/")) {
+      const safe = path.basename(resolved.relative).replace(/[^\w.-]+/g, "_")
+      baseHeaders["content-disposition"] = `inline; filename="${safe}"`
+    }
+    const range = request.headers.range
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(String(range).trim())
+      if (match) {
+        const from = match[1] ?? ""
+        const to = match[2] ?? ""
+        let start = from !== "" ? Number.parseInt(from, 10) : 0
+        let end = to !== "" ? Number.parseInt(to, 10) : size - 1
+        if (
+          Number.isNaN(start) ||
+          Number.isNaN(end) ||
+          start < 0 ||
+          end < start ||
+          start >= size
+        ) {
+          response.writeHead(416, { "content-range": `bytes */${size}` })
+          response.end()
+          return
+        }
+        end = Math.min(end, size - 1)
+        const chunk = bytes.subarray(start, end + 1)
+        response.writeHead(206, {
+          ...baseHeaders,
+          "content-range": `bytes ${start}-${end}/${size}`,
+          "content-length": chunk.length,
+        })
+        response.end(chunk)
+        return
+      }
+    }
+    response.writeHead(200, { ...baseHeaders, "content-length": size })
     response.end(bytes)
+  }
+
+  /** HTML wrapper so images and video fit the preview pane and open cleanly in a tab. */
+  private sendMediaViewer(response: http.ServerResponse, url: URL): void {
+    const requested = url.searchParams.get("path") ?? ""
+    const resolved = this.resolveProjectFile(requested)
+    if (!resolved) {
+      response.writeHead(403, { "content-type": "text/plain" })
+      response.end("forbidden")
+      return
+    }
+    try {
+      const fd = fs.openSync(resolved.absolute, "r")
+      fs.closeSync(fd)
+    } catch {
+      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+      response.end(this.fileNotFoundMessage(resolved.relative))
+      return
+    }
+    const kind = mediaKindForFilename(resolved.relative)
+    const src = `/file?path=${encodeURIComponent(resolved.relative)}`
+    const safeName = resolved.relative.replace(/[<>&"]/g, "")
+    let body: string
+    if (kind === "video") {
+      body = `<video controls autoplay playsinline src="${src}"></video>`
+    } else if (kind === "audio") {
+      body = `<audio controls autoplay src="${src}"></audio>`
+    } else {
+      body = `<img src="${src}" alt="${safeName}" />`
+    }
+    const html = `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${safeName}</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0a0907; }
+  body { display: flex; align-items: center; justify-content: center; padding: 12px; box-sizing: border-box; }
+  img, video { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
+  audio { width: min(100%, 28rem); }
+</style>
+</head><body>${body}</body></html>`
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+    response.end(html)
   }
 
   /**
@@ -984,9 +1092,14 @@ export class WebServer {
       if (key && key === this.preview.reloadKey) return null
     }
 
-    // The token in the query string is only for the sign-in exchange. On
-    // every other path it would end up in history and in referrers.
-    const query = url.pathname === "/" || url.pathname === "/session" ? url.searchParams.get("t") : null
+    // Sign-in uses ?t=; media GET routes accept it so “Open in tab” works without
+    // relying on cookies in a fresh tab (local dev only — still localhost-gated).
+    const queryTokenOk =
+      url.pathname === "/" ||
+      url.pathname === "/session" ||
+      url.pathname === "/file" ||
+      url.pathname === "/file/view"
+    const query = queryTokenOk ? url.searchParams.get("t") : null
     const supplied = (Array.isArray(header) ? header[0] : header) ?? cookie ?? query
     if (supplied !== this.token) return 401
 
@@ -1057,7 +1170,9 @@ export class WebServer {
       return
     }
     try {
-      const html = fs.readFileSync(file, "utf8")
+      const html = fs
+        .readFileSync(file, "utf8")
+        .replace("</head>", `<script>window.__PUNANI_MEDIA_TOKEN=${JSON.stringify(this.token)};</script></head>`)
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
@@ -1353,11 +1468,14 @@ export class WebServer {
   private async executeTurn(provider: any, key: string | undefined): Promise<void> {
     // When the turn started, so the pane can tell what it made.
     const started = Date.now()
-    const mediaKeys = this.mediaKeyOverrides()
+    this.config.reloadFromDiskIfNewer()
     const tools = [
       ...buildTools(
-        this.config.resolvedImageSettings(mediaKeys),
-        this.config.resolvedAudioSettings(mediaKeys),
+        () => this.config.resolvedImageSettings(this.mediaKeyOverrides()),
+        () => {
+          this.config.reloadFromDiskIfNewer()
+          return this.config.resolvedAudioSettings(this.mediaKeyOverrides())
+        },
         this.mcpTools,
       ),
       ...this.skillTools,

@@ -6,6 +6,7 @@ import { BUILTIN_PROVIDERS, type ModelOverride } from "../provider/builtin.js"
 import type { ProviderConfig, ReasoningEffort } from "../provider/types.js"
 import type { ImageSettings } from "../tool/image.js"
 import type { AudioSettings } from "../tool/audio.js"
+import { resolveTtsModelId } from "../provider/elevenlabs.js"
 import type { McpServerConfig } from "../mcp/client.js"
 
 /**
@@ -31,6 +32,8 @@ export interface ConfigFile {
   providers: Record<string, ProviderConfig>
   /** provider id -> API key. Never leaves the machine except to its own endpoint. */
   apiKeys: Record<string, string>
+  /** Speech/image keys — separate from LLM provider keys even when ids overlap (e.g. provider "kling"). */
+  mediaKeys: Record<string, string>
   /** "provider/model" -> overrides. */
   models: Record<string, ModelOverride>
   /** "provider/model" -> how hard the model is asked to think. */
@@ -67,6 +70,7 @@ export const DEFAULT_PERMISSIONS: Record<string, PermissionRule[]> = {
   write: [{ pattern: "*", effect: "allow" }],
   edit: [{ pattern: "*", effect: "allow" }],
   bash: [{ pattern: "*", effect: "allow" }],
+  fetch: [{ pattern: "*", effect: "allow" }],
   // These ask. The first pair can overwrite what is there; the last can
   // delete it.
   "write-destructive": [{ pattern: "*", effect: "ask" }],
@@ -106,35 +110,68 @@ export const PERMISSIONS_VERSION = 2
 /** Media backends store keys here — not duplicated under `image` / `audio`. */
 export const MEDIA_API_KEY_IDS = ["elevenlabs", "kling", "fal"] as const
 
+function ensureMediaKeys(config: ConfigFile): Record<string, string> {
+  if (!config.mediaKeys || typeof config.mediaKeys !== "object") config.mediaKeys = {}
+  return config.mediaKeys
+}
+
 function normalizeMediaKeys(config: ConfigFile): boolean {
   let migrated = false
+  const media = ensureMediaKeys(config)
   if (config.audio.apiKey) {
-    if (!config.apiKeys.elevenlabs) config.apiKeys.elevenlabs = config.audio.apiKey
+    if (!media.elevenlabs) media.elevenlabs = config.audio.apiKey
     delete config.audio.apiKey
     migrated = true
   }
   if (config.image.apiKey) {
     const key = config.image.apiKey
-    if (config.image.provider === "kling" && key !== config.apiKeys.elevenlabs) {
-      if (!config.apiKeys.kling) config.apiKeys.kling = key
-    } else if (config.image.provider === "openai-compatible" && key !== config.apiKeys.elevenlabs) {
-      if (!config.apiKeys.fal) config.apiKeys.fal = key
+    const speech = media.elevenlabs ?? config.apiKeys.elevenlabs
+    if (config.image.provider === "kling" && key !== speech) {
+      if (!media.kling) media.kling = key
+    } else if (config.image.provider === "openai-compatible" && key !== speech) {
+      if (!media.fal) media.fal = key
     }
     delete config.image.apiKey
     migrated = true
   }
-  const eleven = config.apiKeys.elevenlabs
-  if (eleven) {
-    if (config.apiKeys.kling === eleven) {
-      delete config.apiKeys.kling
+  if (!media.elevenlabs && config.apiKeys.elevenlabs && config.audio.provider === "elevenlabs") {
+    media.elevenlabs = config.apiKeys.elevenlabs
+    migrated = true
+  }
+  for (const id of MEDIA_API_KEY_IDS) {
+    const legacy = config.apiKeys[id]
+    if (legacy && !media[id]) {
+      media[id] = legacy
       migrated = true
     }
-    if (config.apiKeys.fal === eleven) {
-      delete config.apiKeys.fal
+    if (legacy && !config.providers[id]) {
+      delete config.apiKeys[id]
+      migrated = true
+    }
+  }
+  const speech = media.elevenlabs
+  if (speech) {
+    if (media.kling === speech) {
+      delete media.kling
+      migrated = true
+    }
+    if (media.fal === speech) {
+      delete media.fal
       migrated = true
     }
   }
   return migrated
+}
+
+/** Web UI or mistaken `/audio voice` list numbers sometimes land in `audio.model`. */
+function normalizeAudioSettings(config: ConfigFile): boolean {
+  const model = config.audio.model
+  if (!model) return false
+  const resolved = resolveTtsModelId(model)
+  if (resolved === model) return false
+  if (resolved) config.audio.model = resolved
+  else delete config.audio.model
+  return true
 }
 
 function emptyConfig(): ConfigFile {
@@ -142,6 +179,7 @@ function emptyConfig(): ConfigFile {
     version: 1,
     providers: {},
     apiKeys: {},
+    mediaKeys: {},
     models: {},
     permissions: structuredClone(DEFAULT_PERMISSIONS),
     permissionsVersion: PERMISSIONS_VERSION,
@@ -165,6 +203,7 @@ function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean; m
     defaultProvider: typeof raw.defaultProvider === "string" ? raw.defaultProvider : undefined,
     providers: {},
     apiKeys: {},
+    mediaKeys: {},
     models: {},
     permissions: {},
     permissionsVersion: PERMISSIONS_VERSION,
@@ -192,6 +231,11 @@ function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean; m
   if (raw.apiKeys && typeof raw.apiKeys === "object") {
     for (const [id, value] of Object.entries<any>(raw.apiKeys)) {
       if (typeof value === "string" && value.length > 0 && !DANGEROUS_KEYS.has(id)) config.apiKeys[id] = value
+    }
+  }
+  if (raw.mediaKeys && typeof raw.mediaKeys === "object") {
+    for (const [id, value] of Object.entries<any>(raw.mediaKeys)) {
+      if (typeof value === "string" && value.length > 0 && !DANGEROUS_KEYS.has(id)) config.mediaKeys[id] = value
     }
   }
   if (raw.models && typeof raw.models === "object") {
@@ -277,12 +321,15 @@ function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean; m
     }
   }
   const migratedMedia = normalizeMediaKeys(config)
-  return { config, migratedPermissions, migratedMedia }
+  const migratedAudio = normalizeAudioSettings(config)
+  return { config, migratedPermissions, migratedMedia: migratedMedia || migratedAudio }
 }
 
 export class ConfigStore {
   private config!: ConfigFile
   private loaded = false
+  /** Last known mtime of the config file on disk (for reload when another process saves). */
+  private diskMtimeMs = 0
 
   constructor(private readonly file: string = paths.configFile) {}
 
@@ -292,11 +339,30 @@ export class ConfigStore {
 
   load(): ConfigFile {
     if (this.loaded) return this.config
+    return this.readFromDisk()
+  }
+
+  /** Pick up `/audio key`, web Settings, or hand edits from another process. */
+  reloadFromDiskIfNewer(): void {
+    this.ensureLoaded()
+    let mtime = 0
+    try {
+      mtime = fs.statSync(this.file).mtimeMs
+    } catch {
+      return
+    }
+    if (mtime <= this.diskMtimeMs) return
+    this.loaded = false
+    this.readFromDisk()
+  }
+
+  private readFromDisk(): ConfigFile {
     let raw: any = undefined
     let fileExisted = false
     try {
       raw = JSON.parse(fs.readFileSync(this.file, "utf8"))
       fileExisted = true
+      this.diskMtimeMs = fs.statSync(this.file).mtimeMs
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw new Error(
@@ -308,8 +374,16 @@ export class ConfigStore {
     const { config, migratedPermissions, migratedMedia } = coerce(raw)
     this.config = config
     for (const key of Object.values(this.config.apiKeys)) registerSecret(key)
+    for (const key of Object.values(this.config.mediaKeys ?? {})) registerSecret(key)
     this.loaded = true
     if ((migratedPermissions || migratedMedia) && fileExisted) this.save()
+    else if (fileExisted) {
+      try {
+        this.diskMtimeMs = fs.statSync(this.file).mtimeMs
+      } catch {
+        /* best effort */
+      }
+    }
     return this.config
   }
 
@@ -358,6 +432,10 @@ export class ConfigStore {
     const config = this.get()
     config.apiKeys[providerId] = key
     registerSecret(key)
+    if (providerId === "elevenlabs") {
+      ensureMediaKeys(config).elevenlabs = key
+      if (config.audio.provider === "none") config.audio.provider = "elevenlabs"
+    }
     this.save()
   }
 
@@ -423,25 +501,40 @@ export class ConfigStore {
     return this.get().headers[providerId] ?? {}
   }
 
-  /** ElevenLabs key lives under `apiKeys.elevenlabs` (legacy: `audio.apiKey`). */
+  /** ElevenLabs speech key — only `mediaKeys.elevenlabs` (not LLM provider keys). */
   elevenLabsKey(): string | undefined {
     const config = this.get()
-    return config.apiKeys.elevenlabs ?? config.audio.apiKey
+    return config.mediaKeys?.elevenlabs ?? config.audio.apiKey
   }
 
   mediaKey(id: (typeof MEDIA_API_KEY_IDS)[number]): string | undefined {
-    return this.get().apiKeys[id]
+    return this.get().mediaKeys?.[id]
   }
 
-  setMediaKey(id: (typeof MEDIA_API_KEY_IDS)[number], key: string): void {
+  setMediaKey(id: (typeof MEDIA_API_KEY_IDS)[number], key: string): { ok: boolean; error?: string } {
     const value = key.trim()
-    if (!value) return
+    if (!value) return { ok: false, error: "the key was empty" }
     const config = this.get()
-    config.apiKeys[id] = value
+    const media = ensureMediaKeys(config)
+    const eleven = media.elevenlabs ?? config.audio.apiKey
+    if (id !== "elevenlabs" && eleven && value === eleven) {
+      return {
+        ok: false,
+        error:
+          "that is the same value as your ElevenLabs speech key. Use a different Kling/image key, or save speech under Settings → speech.",
+      }
+    }
+    if (id === "elevenlabs" && media.kling === value) delete media.kling
+    if (id === "elevenlabs" && media.fal === value) delete media.fal
+    media[id] = value
     registerSecret(value)
-    if (id === "elevenlabs") delete config.audio.apiKey
+    if (id === "elevenlabs") {
+      delete config.audio.apiKey
+      if (config.audio.provider === "none") config.audio.provider = "elevenlabs"
+    }
     if (id === "kling" && config.image.provider === "kling") delete config.image.apiKey
     this.save()
+    return { ok: true }
   }
 
   /** Image settings with keys resolved for the active backend. */
@@ -450,7 +543,7 @@ export class ConfigStore {
     delete image.apiKey
     if (image.provider === "kling") return image
     if (image.provider === "openai-compatible") {
-      const fal = overrides?.fal ?? this.get().apiKeys.fal
+      const fal = overrides?.fal ?? this.mediaKey("fal")
       return fal ? { ...image, apiKey: fal } : image
     }
     return image
@@ -466,7 +559,8 @@ export class ConfigStore {
 
   clearMediaKey(id: (typeof MEDIA_API_KEY_IDS)[number]): void {
     const config = this.get()
-    delete config.apiKeys[id]
+    const media = ensureMediaKeys(config)
+    delete media[id]
     this.save()
   }
 
@@ -491,10 +585,16 @@ export class ConfigStore {
   setAudioSettings(settings: AudioSettings): void {
     const config = this.get()
     const { apiKey, ...audio } = settings
+    if (audio.model !== undefined) {
+      const resolved = resolveTtsModelId(audio.model)
+      if (resolved) audio.model = resolved
+      else delete audio.model
+    }
     config.audio = audio
     if (typeof apiKey === "string" && apiKey.trim()) {
-      config.apiKeys.elevenlabs = apiKey.trim()
+      ensureMediaKeys(config).elevenlabs = apiKey.trim()
       registerSecret(apiKey)
+      delete config.audio.apiKey
     }
     this.save()
   }
@@ -527,6 +627,7 @@ export class ConfigStore {
     fs.renameSync(temp, this.file)
     try {
       fs.chmodSync(this.file, 0o600)
+      this.diskMtimeMs = fs.statSync(this.file).mtimeMs
     } catch {
       /* best effort */
     }

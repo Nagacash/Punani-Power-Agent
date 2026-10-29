@@ -30,6 +30,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
     "dev": "tsx src/main.ts",
+    "web:dev": "tsx src/main.ts web",
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist",
@@ -42,7 +43,9 @@
     "docker:run": "docker run --rm -it -p 127.0.0.1:4096:4096 -v \"$HOME/.config/punani-powerd:/config\" -v \"$HOME/.local/share/punani-powerd:/data\" punani-powerd web --host 0.0.0.0 --port 4096",
     "build:bun": "bun build --compile --outfile dist/punani src/main.ts",
     "clean:appledouble": "find . -name '._*' -not -path './node_modules/.pnpm/*' -delete",
-    "landing": "npm --prefix landing/punani-ai run dev"
+    "landing": "npm --prefix landing/punani-ai run dev",
+    "web:local": "npm run build && node dist/main.js web --open",
+    "global:install": "npm run build && npm pack && npm i -g punani-powerd-*.tgz && rm -f punani-powerd-*.tgz"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
