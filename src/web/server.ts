@@ -5,7 +5,7 @@ import fs from "node:fs"
 import http from "node:http"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { ConfigStore } from "../config/store.js"
+import { ConfigStore, MEDIA_API_KEY_IDS } from "../config/store.js"
 import { ProviderRegistry } from "../provider/registry.js"
 import { SessionStore, toChatMessages, type SessionMeta } from "../session/store.js"
 import { buildTools } from "../tool/registry.js"
@@ -1184,11 +1184,22 @@ export class WebServer {
         this.settings.setDefaultModel(body.model ? String(body.model) : undefined)
         return json(response, { ok: true })
       }
+      case "settings-media-key": {
+        const id = String(body.id ?? "")
+        const result = this.settings.setMediaKey(id as (typeof MEDIA_API_KEY_IDS)[number], String(body.key ?? ""))
+        if (result.ok) this.hub.send({ type: "notice", text: `key stored for ${id}` })
+        return json(response, result, result.ok ? 200 : 400)
+      }
+      case "settings-media-key-clear": {
+        this.settings.clearMediaKey(String(body.id ?? "") as (typeof MEDIA_API_KEY_IDS)[number])
+        this.hub.send({ type: "notice", text: `key removed for ${body.id}` })
+        return json(response, { ok: true })
+      }
       case "settings-voices": {
         const { listVoices } = await import("../provider/elevenlabs.js")
         try {
           const fromBody = typeof body.key === "string" ? body.key.trim() : ""
-          const stored = this.config.elevenLabsKey() ?? ""
+          const stored = this.requestKeys.elevenlabs ?? this.config.elevenLabsKey() ?? ""
           const apiKey = fromBody || stored
           if (!apiKey) {
             return json(
@@ -1342,8 +1353,13 @@ export class WebServer {
   private async executeTurn(provider: any, key: string | undefined): Promise<void> {
     // When the turn started, so the pane can tell what it made.
     const started = Date.now()
+    const mediaKeys = this.mediaKeyOverrides()
     const tools = [
-      ...buildTools(this.config.resolvedImageSettings(), this.config.resolvedAudioSettings(), this.mcpTools),
+      ...buildTools(
+        this.config.resolvedImageSettings(mediaKeys),
+        this.config.resolvedAudioSettings(mediaKeys),
+        this.mcpTools,
+      ),
       ...this.skillTools,
     ]
     // A key the browser sent wins over the one on disk, so the browser can
@@ -1690,6 +1706,16 @@ export class WebServer {
     this.hub.send({ type: "state", ...this.snapshot() })
     this.hub.send({ type: "history", messages: this.messages })
     return { ok: true }
+  }
+
+  /** Browser-held media keys for this request (never written to disk). */
+  private mediaKeyOverrides(): Partial<Record<(typeof MEDIA_API_KEY_IDS)[number], string>> {
+    const out: Partial<Record<(typeof MEDIA_API_KEY_IDS)[number], string>> = {}
+    for (const id of MEDIA_API_KEY_IDS) {
+      const value = this.requestKeys[id]
+      if (value) out[id] = value
+    }
+    return out
   }
 }
 

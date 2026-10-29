@@ -113,18 +113,26 @@ function normalizeMediaKeys(config: ConfigFile): boolean {
     delete config.audio.apiKey
     migrated = true
   }
-  if (config.image.provider === "kling" && config.image.apiKey) {
+  if (config.image.apiKey) {
+    const key = config.image.apiKey
+    if (config.image.provider === "kling" && key !== config.apiKeys.elevenlabs) {
+      if (!config.apiKeys.kling) config.apiKeys.kling = key
+    } else if (config.image.provider === "openai-compatible" && key !== config.apiKeys.elevenlabs) {
+      if (!config.apiKeys.fal) config.apiKeys.fal = key
+    }
     delete config.image.apiKey
     migrated = true
   }
   const eleven = config.apiKeys.elevenlabs
-  if (
-    eleven &&
-    config.image.apiKey === eleven &&
-    config.image.provider !== "openai-compatible"
-  ) {
-    delete config.image.apiKey
-    migrated = true
+  if (eleven) {
+    if (config.apiKeys.kling === eleven) {
+      delete config.apiKeys.kling
+      migrated = true
+    }
+    if (config.apiKeys.fal === eleven) {
+      delete config.apiKeys.fal
+      migrated = true
+    }
   }
   return migrated
 }
@@ -147,9 +155,9 @@ function emptyConfig(): ConfigFile {
 /** Keys that would change the shape of an object rather than fill it. */
 const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"])
 
-function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean } {
+function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean; migratedMedia: boolean } {
   const base = emptyConfig()
-  if (!raw || typeof raw !== "object") return { config: base, migratedPermissions: false }
+  if (!raw || typeof raw !== "object") return { config: base, migratedPermissions: false, migratedMedia: false }
   let migratedPermissions = false
   const config: ConfigFile = {
     version: 1,
@@ -269,7 +277,7 @@ function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean } 
     }
   }
   const migratedMedia = normalizeMediaKeys(config)
-  return { config, migratedPermissions: migratedPermissions || migratedMedia }
+  return { config, migratedPermissions, migratedMedia }
 }
 
 export class ConfigStore {
@@ -297,11 +305,11 @@ export class ConfigStore {
         )
       }
     }
-    const { config, migratedPermissions } = coerce(raw)
+    const { config, migratedPermissions, migratedMedia } = coerce(raw)
     this.config = config
     for (const key of Object.values(this.config.apiKeys)) registerSecret(key)
     this.loaded = true
-    if (migratedPermissions && fileExisted) this.save()
+    if ((migratedPermissions || migratedMedia) && fileExisted) this.save()
     return this.config
   }
 
@@ -437,26 +445,29 @@ export class ConfigStore {
   }
 
   /** Image settings with keys resolved for the active backend. */
-  resolvedImageSettings(): ImageSettings {
+  resolvedImageSettings(overrides?: Partial<Record<(typeof MEDIA_API_KEY_IDS)[number], string>>): ImageSettings {
     const image = { ...this.get().image }
-    if (image.provider === "kling") {
-      delete image.apiKey
-      return image
-    }
+    delete image.apiKey
+    if (image.provider === "kling") return image
     if (image.provider === "openai-compatible") {
-      const fal = this.get().apiKeys.fal
-      if (!image.apiKey && fal) image.apiKey = fal
-      return image
+      const fal = overrides?.fal ?? this.get().apiKeys.fal
+      return fal ? { ...image, apiKey: fal } : image
     }
     return image
   }
 
   /** Speech settings; ElevenLabs auth comes from `apiKeys.elevenlabs`. */
-  resolvedAudioSettings(): AudioSettings {
+  resolvedAudioSettings(overrides?: Partial<Record<(typeof MEDIA_API_KEY_IDS)[number], string>>): AudioSettings {
     const audio = { ...this.get().audio }
     delete audio.apiKey
-    const key = this.elevenLabsKey()
-    return key ? { ...audio, apiKey: key } : audio
+    const key = overrides?.elevenlabs ?? this.elevenLabsKey()
+    return key && audio.provider === "elevenlabs" ? { ...audio, apiKey: key } : audio
+  }
+
+  clearMediaKey(id: (typeof MEDIA_API_KEY_IDS)[number]): void {
+    const config = this.get()
+    delete config.apiKeys[id]
+    this.save()
   }
 
   imageSettings(): ImageSettings {
@@ -490,10 +501,14 @@ export class ConfigStore {
 
   setImageSettings(settings: ImageSettings): void {
     const config = this.get()
-    const next = { ...settings }
-    if (next.provider === "kling") delete next.apiKey
-    config.image = next
-    if (next.provider === "openai-compatible" && next.apiKey) registerSecret(next.apiKey)
+    const { apiKey, ...rest } = settings
+    config.image = { ...rest }
+    const next = config.image
+    if (typeof apiKey === "string" && apiKey.trim()) {
+      const value = apiKey.trim()
+      if (next.provider === "kling") this.setMediaKey("kling", value)
+      else if (next.provider === "openai-compatible") this.setMediaKey("fal", value)
+    }
     this.save()
   }
 

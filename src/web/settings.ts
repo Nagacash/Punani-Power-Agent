@@ -1,4 +1,4 @@
-import { ConfigStore } from "../config/store.js"
+import { ConfigStore, MEDIA_API_KEY_IDS } from "../config/store.js"
 import { KNOWN_MCP_SERVERS } from "../mcp/client.js"
 import type { McpServerConfig } from "../mcp/client.js"
 import type { ImageSettings } from "../tool/image.js"
@@ -62,7 +62,12 @@ export class Settings {
 
     const image = { ...stored.image }
     const audio = { ...stored.audio }
-    const imageHasKey = Boolean(image.apiKey || stored.apiKeys.fal)
+    const imageHasKey =
+      image.provider === "kling"
+        ? Boolean(stored.apiKeys.kling)
+        : image.provider === "openai-compatible"
+          ? Boolean(stored.apiKeys.fal)
+          : false
     const audioHasKey = Boolean(stored.apiKeys.elevenlabs)
     delete (image as any).apiKey
     delete (audio as any).apiKey
@@ -152,11 +157,28 @@ export class Settings {
     if (input.apiKey !== undefined) {
       const value = input.apiKey.trim()
       if (value) {
-        next.apiKey = value
         if (next.provider === "none") next.provider = "openai-compatible"
+        if (next.provider === "kling") this.config.setMediaKey("kling", value)
+        else if (next.provider === "openai-compatible") this.config.setMediaKey("fal", value)
       }
     }
+    delete next.apiKey
     this.config.setImageSettings(next)
+    return { ok: true }
+  }
+
+  /** Store a speech or image API key (elevenlabs, kling, fal). */
+  setMediaKey(id: (typeof MEDIA_API_KEY_IDS)[number], key: string): { ok: boolean; error?: string } {
+    if (!MEDIA_API_KEY_IDS.includes(id)) return { ok: false, error: `unknown media key "${id}"` }
+    const value = key.trim()
+    if (!value) return { ok: false, error: "the key was empty" }
+    this.config.setMediaKey(id, value)
+    log.info(`settings: stored media key ${id}`)
+    return { ok: true }
+  }
+
+  clearMediaKey(id: (typeof MEDIA_API_KEY_IDS)[number]): { ok: boolean } {
+    if (MEDIA_API_KEY_IDS.includes(id)) this.config.clearMediaKey(id)
     return { ok: true }
   }
 
