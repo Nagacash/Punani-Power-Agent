@@ -2129,6 +2129,97 @@
       }
 
 
+      /** Speech / image API keys: separate slots (elevenlabs, kling, fal) with browser or disk storage. */
+      function mediaKeyField(id, label, hasDiskKey) {
+        const field = document.createElement("div");
+        field.className = "field";
+        const inBrowser = Object.prototype.hasOwnProperty.call(store.getState().browserKeys, id);
+        const where = document.createElement("select");
+        for (const [value, text] of [["disk", "on this machine"], ["browser", "in the browser"]]) {
+          const o = document.createElement("option");
+          o.value = value;
+          o.textContent = text;
+          if ((value === "browser") === inBrowser) o.selected = true;
+          where.appendChild(o);
+        }
+        const input = document.createElement("input");
+        input.type = "password";
+        input.autocomplete = "off";
+        input.placeholder = inBrowser
+          ? `${label} key in browser — type to replace`
+          : hasDiskKey
+            ? `${label} key on disk — type to replace`
+            : `${label} API key`;
+        const save = document.createElement("button");
+        save.className = "pill gold";
+        save.innerHTML = `<span class="orb">✓</span>Save key`;
+        async function persist(value) {
+          const keys = { ...store.getState().browserKeys };
+          if (where.value === "browser") {
+            keys[id] = value;
+            saveBrowserKeys(keys);
+            setState({ browserKeys: keys });
+            await apiFetch("/api/settings-media-key-clear", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ id }),
+            });
+          } else {
+            delete keys[id];
+            saveBrowserKeys(keys);
+            setState({ browserKeys: keys });
+            await apiFetch("/api/settings-media-key", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ id, key: value }),
+            });
+          }
+          input.value = "";
+          await loadSettings();
+          focusComposer();
+        }
+        where.onchange = async () => {
+          const value = input.value.trim();
+          input.placeholder =
+            where.value === "browser"
+              ? `${label} key in browser — type to replace`
+              : hasDiskKey
+                ? `${label} key on disk — type to replace`
+                : `${label} API key`;
+          if (value) await persist(value);
+        };
+        save.onclick = async () => {
+          const value = input.value.trim();
+          if (!value) {
+            info("type a key first");
+            return;
+          }
+          await persist(value);
+        };
+        if (hasDiskKey || inBrowser) {
+          const clear = document.createElement("button");
+          clear.className = "pill danger";
+          clear.innerHTML = `<span class="orb">✕</span>Remove`;
+          clear.onclick = async () => {
+            const keys = { ...store.getState().browserKeys };
+            delete keys[id];
+            saveBrowserKeys(keys);
+            setState({ browserKeys: keys });
+            await apiFetch("/api/settings-media-key-clear", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ id }),
+            });
+            input.value = "";
+            await loadSettings();
+            focusComposer();
+          };
+          field.appendChild(clear);
+        }
+        field.append(where, input, save);
+        return field;
+      }
+
       function mediaTab() {
         const wrap = document.createElement("div");
         const image = settingsData.image;
@@ -2151,13 +2242,23 @@
         klingNote.className = "small";
         klingNote.hidden = image.provider !== "kling";
         klingNote.textContent =
-          "Kling uses the kling CLI on this machine (npm i -g @klingai/cli-global, then kling login). No API key field here.";
-        function syncKlingNote() {
-          klingNote.hidden = backend.value !== "kling";
-          imgKey.hidden = backend.value === "kling";
+          "Kling images use the kling CLI on this machine (npm i -g @klingai/cli-global, then kling login). Store a Kling API key separately below if you use Kling MCP or other API tools — it never shares the ElevenLabs key.";
+        const klingKeyWrap = mediaKeyField("kling", "Kling", image.provider === "kling" && image.hasKey);
+        klingKeyWrap.hidden = image.provider !== "kling";
+        const falKeyWrap = mediaKeyField(
+          "fal",
+          "Image (OpenAI-compatible)",
+          image.provider === "openai-compatible" && image.hasKey,
+        );
+        falKeyWrap.hidden = image.provider !== "openai-compatible";
+        function syncImageKeys() {
+          const mode = backend.value;
+          klingNote.hidden = mode !== "kling";
+          klingKeyWrap.hidden = mode !== "kling";
+          falKeyWrap.hidden = mode !== "openai-compatible";
         }
         backend.onchange = async () => {
-          syncKlingNote();
+          syncImageKeys();
           await apiFetch("/api/settings-image", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -2187,33 +2288,10 @@
         imgField.appendChild(url);
         imgField.appendChild(saveImg);
         img.appendChild(imgField);
-        const imgKey = document.createElement("div");
-        imgKey.className = "field";
-        const imgKeyInput = document.createElement("input");
-        imgKeyInput.type = "password";
-        imgKeyInput.placeholder = image.hasKey ? "key stored — type to replace" : "API key";
-        imgKeyInput.autocomplete = "off";
-        const saveImgKey = document.createElement("button");
-        saveImgKey.className = "pill";
-        saveImgKey.innerHTML = `<span class="orb">✓</span>Save key`;
-        saveImgKey.onclick = async () => {
-          if (!imgKeyInput.value.trim()) { info("type a key first"); return; }
-          await apiFetch("/api/settings-image", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              provider: backend.value === "none" ? "openai-compatible" : backend.value,
-              apiKey: imgKeyInput.value,
-            }),
-          });
-          imgKeyInput.value = "";
-          await loadSettings();
-        };
-        imgKey.appendChild(imgKeyInput);
-        imgKey.appendChild(saveImgKey);
         img.appendChild(klingNote);
-        img.appendChild(imgKey);
-        syncKlingNote();
+        img.appendChild(klingKeyWrap);
+        img.appendChild(falKeyWrap);
+        syncImageKeys();
         wrap.appendChild(img);
 
         const aud = document.createElement("div");
@@ -2257,25 +2335,8 @@
         audField.appendChild(saveAud);
         aud.appendChild(audField);
 
-        const audKey = document.createElement("div");
-        audKey.className = "field";
-        const audKeyInput = document.createElement("input");
-        audKeyInput.type = "password";
-        audKeyInput.placeholder = audio.hasKey ? "key stored — type to replace" : "ElevenLabs API key";
-        audKeyInput.autocomplete = "off";
-        const saveAudKey = document.createElement("button");
-        saveAudKey.className = "pill";
-        saveAudKey.innerHTML = `<span class="orb">✓</span>Save key`;
-        saveAudKey.onclick = async () => {
-          if (!audKeyInput.value.trim()) { info("type a key first"); return; }
-          await apiFetch("/api/settings-audio", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ provider: "elevenlabs", apiKey: audKeyInput.value }),
-          });
-          audKeyInput.value = "";
-          await loadSettings();
-        };
+        const audKey = mediaKeyField("elevenlabs", "ElevenLabs", audio.hasKey);
+        const audKeyInput = audKey.querySelector("input");
         const listVoices = document.createElement("button");
         listVoices.className = "pill";
         listVoices.innerHTML = `<span class="orb">☰</span>Voices`;
@@ -2283,7 +2344,7 @@
           const res = await apiFetch("/api/settings-voices", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ key: audKeyInput.value || undefined }),
+            body: JSON.stringify({ key: audKeyInput.value.trim() || undefined }),
           });
           const data = await res.json();
           if (data.error) { info(data.error); return; }
@@ -2304,8 +2365,6 @@
           }
           aud.appendChild(box);
         };
-        audKey.appendChild(audKeyInput);
-        audKey.appendChild(saveAudKey);
         audKey.appendChild(listVoices);
         aud.appendChild(audKey);
         wrap.appendChild(aud);

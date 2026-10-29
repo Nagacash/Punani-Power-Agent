@@ -33,5 +33,7 @@ test("saving an image key turns on openai-compatible when still off", () => {
   assert.equal(result.ok, true)
   const image = store.imageSettings()
   assert.equal(image.provider, "openai-compatible")
-  assert.equal(image.apiKey, "test-image-key")
+  assert.equal(image.apiKey, undefined)
+  assert.equal(store.mediaKey("fal"), "test-image-key")
+  assert.equal(store.resolvedImageSettings().apiKey, "test-image-key")
 })
