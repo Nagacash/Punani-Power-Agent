@@ -121,7 +121,7 @@ export function buildSystemPrompt(
 }
 
 export interface AgentEvent {
-  type: "assistant_text" | "reasoning" | "tool_start" | "tool_end" | "error" | "usage" | "done" | "notice"
+  type: "assistant_text" | "reasoning" | "tool_start" | "tool_end" | "error" | "usage" | "done" | "notice" | "summary"
   text?: string
   /** True when `text` is a streaming chunk, not the full reply. */
   partial?: boolean
@@ -131,6 +131,8 @@ export interface AgentEvent {
   result?: ToolResult
   error?: LlmError
   usage?: { inputTokens: number; outputTokens: number; cost: number }
+  /** What the turn actually did, so the user does not have to guess. */
+  summary?: { changed: string[]; commands: string[] }
 }
 
 /** A client and model to carry on with after a provider refused the request. */
@@ -410,6 +412,10 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
 
     if (completion.toolCalls.length === 0) {
       options.onEvent?.({ type: "usage", usage: usage() })
+      options.onEvent?.({
+        type: "summary",
+        summary: { changed: [...turn.changed], commands: [...turn.commands] },
+      })
       checkReceipts(options, turn.loadedSkills, turn.toolsUsed)
       return { messages, added, usage: usage(), steps, compaction, stoppedReason: "finished" }
     }
@@ -435,6 +441,10 @@ export async function runAgentTurn(options: AgentOptions, history: ChatMessage[]
 
   log.warn(`turn stopped after ${maxSteps} tool steps, to stay within budget`)
   options.onEvent?.({ type: "usage", usage: usage() })
+  options.onEvent?.({
+    type: "summary",
+    summary: { changed: [...turn.changed], commands: [...turn.commands] },
+  })
   return { messages, added, usage: usage(), steps, compaction, stoppedReason: "max_steps" }
 }
 
@@ -446,6 +456,10 @@ interface TurnState {
   toolsUsed: Set<string>
   /** The calls the user refused, so the same one is not asked for twice. */
   refused: Set<string>
+  /** Files the turn created or edited, relative to the project root. */
+  changed: string[]
+  /** Commands the turn ran. */
+  commands: string[]
 }
 
 /**
@@ -509,6 +523,15 @@ async function runToolCall(
   }
 
   emit?.({ type: "tool_end", tool: call.name, toolCallId: call.id, result })
+
+  // Keep track of what the turn actually did, so the end of the turn can
+  // tell the user plainly what changed. A failure is not a change.
+  if (result.meta?.path && !result.isError) {
+    turn.changed.push(result.meta.path)
+  }
+  if (call.name === "bash" && args.command && !result.isError) {
+    turn.commands.push(String(args.command))
+  }
 
   // A refusal is remembered. Asking for the same thing again is a loop.
   if (result.isError && (result.output.startsWith("The user declined") || result.output.startsWith("The user did not answer"))) {
