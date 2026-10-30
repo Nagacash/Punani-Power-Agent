@@ -235,13 +235,32 @@ function loadProject(deps: AppDeps, root: string): Tool[] {
   }
 
   return [
-    ...buildTools(config.resolvedImageSettings(), config.resolvedAudioSettings(), deps.mcpTools ?? []),
+    ...buildTools(
+      () => config.resolvedImageSettings(),
+      () => config.resolvedAudioSettings(),
+      deps.mcpTools ?? [],
+    ),
     ...createSkillTools(groups, skills),
+  ]
+}
+
+/** Rebuild built-in tools after config changed on disk (e.g. `/audio key`). */
+function refreshToolsFromConfig(deps: AppDeps): void {
+  deps.config.reloadFromDiskIfNewer()
+  const skillTools = deps.state.tools.filter((tool) => tool.name.startsWith("skill_"))
+  deps.state.tools = [
+    ...buildTools(
+      () => deps.config.resolvedImageSettings(),
+      () => deps.config.resolvedAudioSettings(),
+      deps.mcpTools ?? [],
+    ),
+    ...skillTools,
   ]
 }
 
 /** Run one agent turn and record the result in the session. */
 async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<void> {
+  refreshToolsFromConfig(deps)
   const { registry, projectRoot, ask, sessions } = deps
   const model = deps.state.model
   const session = deps.state.session

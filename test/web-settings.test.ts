@@ -19,7 +19,7 @@ test("saving a speech key turns on ElevenLabs when still off", () => {
   assert.equal(audio.provider, "elevenlabs")
   assert.equal(audio.apiKey, undefined)
   assert.equal(store.elevenLabsKey(), "test-eleven-key")
-  assert.equal(store.get().apiKeys.elevenlabs, "test-eleven-key")
+  assert.equal(store.get().mediaKeys.elevenlabs, "test-eleven-key")
 })
 
 test("saving an image key turns on openai-compatible when still off", () => {

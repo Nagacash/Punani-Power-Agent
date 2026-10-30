@@ -63,7 +63,10 @@ export const bashTool: Tool = {
     const workdirArg = args.workdir ? String(args.workdir) : "."
     const workdir = resolveInProject(context.projectRoot, workdirArg)
     if (workdir.outside) {
-      throw new ToolError(`workdir "${workdirArg}" is outside the project directory.`)
+      throw new ToolError(
+        `workdir "${workdirArg}" is outside the project directory. ` +
+          "Omit workdir or use a relative path such as \".\" (not an absolute path).",
+      )
     }
 
     const destructive = isDestructiveCommand(command)

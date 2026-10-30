@@ -4,7 +4,7 @@ import http from "node:http"
 import os from "node:os"
 import path from "node:path"
 import { after, before, test } from "node:test"
-import { createImageTool } from "../src/tool/image.ts"
+import { createImageTool, pickKlingAssetUrl } from "../src/tool/image.ts"
 import { ConfigStore } from "../src/config/store.ts"
 import { WebServer } from "../src/web/server.ts"
 import { diskMutate } from "../src/tool/fsutil.ts"
@@ -52,13 +52,49 @@ after(async () => {
   await new Promise<void>((resolve) => mock.close(() => resolve()))
 })
 
+test("pickKlingAssetUrl prefers url_without_watermark", () => {
+  const payload = {
+    works: [{ url: "https://cdn.example/wm.png", url_without_watermark: "https://cdn.example/clean.png" }],
+  }
+  assert.deepEqual(pickKlingAssetUrl(payload, ""), {
+    url: "https://cdn.example/clean.png",
+    watermarkFree: true,
+  })
+  assert.deepEqual(pickKlingAssetUrl({ works: [{ url: "https://cdn.example/only.png" }] }, ""), {
+    url: "https://cdn.example/only.png",
+    watermarkFree: false,
+  })
+})
+
+test("pickKlingAssetUrl finds works under polled generations", () => {
+  const payload = {
+    ok: true,
+    body: {
+      polled: true,
+      generations: [
+        {
+          result: {
+            works: [
+              {
+                url: "https://cdn.example/wm.png",
+                url_without_watermark: "https://cdn.example/clean.png",
+              },
+            ],
+          },
+        },
+      ],
+    },
+  }
+  assert.equal(pickKlingAssetUrl(payload, "")?.url, "https://cdn.example/clean.png")
+})
+
 test("the image tool writes a png into the project", async () => {
-  const tool = createImageTool({
+  const tool = createImageTool(() => ({
     provider: "openai-compatible",
     baseURL: mockURL,
     model: "test-image-1",
     outputDir: "art",
-  })
+  }))
 
   let permission: string | undefined
   const context = {
@@ -84,7 +120,7 @@ test("the image tool writes a png into the project", async () => {
 })
 
 test("a declined image request produces no file", async () => {
-  const tool = createImageTool({ provider: "openai-compatible", baseURL: mockURL, model: "m" })
+  const tool = createImageTool(() => ({ provider: "openai-compatible", baseURL: mockURL, model: "m" }))
   const before = fs.readdirSync(projectRoot).length
   const result = await tool.run(
     { prompt: "declined" },
@@ -102,7 +138,7 @@ test("a declined image request produces no file", async () => {
 })
 
 test("the image tool explains a missing endpoint", async () => {
-  const tool = createImageTool({ provider: "openai-compatible" })
+  const tool = createImageTool(() => ({ provider: "openai-compatible" }))
   await assert.rejects(
     () =>
       tool.run(
@@ -141,6 +177,16 @@ test("the file route serves project files and refuses paths outside it", async (
     const inside = await fetch(`${base}/file?path=inside.txt`, { headers: { "x-punani-token": token } })
     assert.equal(inside.status, 200)
     assert.equal(await inside.text(), "inside content")
+
+    const binPath = path.join(projectRoot, "clip.bin")
+    const binBody = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    fs.writeFileSync(binPath, binBody)
+    const ranged = await fetch(`${base}/file?path=clip.bin`, {
+      headers: { "x-punani-token": token, range: "bytes=2-5" },
+    })
+    assert.equal(ranged.status, 206)
+    assert.equal(ranged.headers.get("content-range"), "bytes 2-5/10")
+    assert.deepEqual(Buffer.from(await ranged.arrayBuffer()), binBody.subarray(2, 6))
 
     // A traversal out of the project must be refused.
     const escape = await fetch(`${base}/file?path=../punani-outside.txt`, {

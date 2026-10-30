@@ -34,6 +34,18 @@ export const KNOWN_TTS_MODELS = [
   "eleven_v3",
 ]
 
+const DEPRECATED_TTS_MODELS = new Set(["eleven_monolingual_v1", "eleven_multilingual_v1"])
+
+/** Drop voice-list numbers, typos, and deprecated ids before calling the API. */
+export function resolveTtsModelId(modelId: string | undefined): string | undefined {
+  if (!modelId?.trim()) return undefined
+  const id = modelId.trim()
+  if (/^\d+$/.test(id)) return undefined
+  if (!id.startsWith("eleven_")) return undefined
+  if (DEPRECATED_TTS_MODELS.has(id)) return "eleven_multilingual_v2"
+  return id
+}
+
 const TIMEOUT_MS = 60_000
 
 async function call(
@@ -167,7 +179,8 @@ export async function synthesize(apiKey: string, options: SynthesizeOptions): Pr
   }
 
   const body: Record<string, unknown> = { text: options.text }
-  if (options.modelId) body.model_id = options.modelId
+  const modelId = resolveTtsModelId(options.modelId)
+  if (modelId) body.model_id = modelId
 
   const voiceSettings: Record<string, number> = {}
   if (options.stability !== undefined) voiceSettings.stability = options.stability

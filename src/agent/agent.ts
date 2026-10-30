@@ -40,6 +40,8 @@ export function buildSystemPrompt(
     "- The user reads the reply, not your thinking. Keep deliberation in your thinking, never in the reply.",
     "- Lead with the answer or the plan. No empty preamble and no restating the question word for word.",
     "- If the question can be answered without tools, answer it and stop. Do not explore the project to be helpful.",
+    "- A public site (for example punani.agency) is not in the repo unless you read those files here. Use `fetch_url` for a normal page, or load scrapling-official when the skill routes say so.",
+    "- For `bash`, the workdir is relative to the project root (usually \".\"). Never pass an absolute path as workdir.",
     "- A greeting, an opinion or a question about what you were already shown is answered, not investigated.",
     "- Match depth to the ask: one line for a hello, a short structured recap after real tool work.",
     "",

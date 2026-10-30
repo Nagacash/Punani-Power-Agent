@@ -78,13 +78,13 @@ after(async () => {
 })
 
 test("the audio tool writes the speech into the project", async () => {
-  const tool = createAudioTool({
+  const tool = createAudioTool(() => ({
     provider: "elevenlabs",
     apiKey: "test-key",
     model: "eleven_multilingual_v2",
     voiceId: "EXAVITQu4vr4xnSDxMaL",
     voiceName: "Sarah",
-  })
+  }))
 
   let permission: string | undefined
   const result = await tool.run(
@@ -109,8 +109,44 @@ test("the audio tool writes the speech into the project", async () => {
   assert.match(result.output, /bytes of audio\/mpeg/)
 })
 
+test("a full relative path is not prefixed twice with the output folder", async () => {
+  const tool = createAudioTool(() => ({ provider: "elevenlabs", apiKey: "test-key", voiceId: "v" }))
+  const result = await tool.run(
+    { text: "smoke test", path: "assets/audio/punani-tts-smoke.mp3" },
+    {
+      projectRoot,
+      requestPermission: async () => ({ granted: true }),
+      notify: () => {},
+      previewDiff: () => {},
+      mutate: diskMutate,
+    },
+  )
+  assert.equal(result.meta?.path, "assets/audio/punani-tts-smoke.mp3")
+})
+
+test("the api key is resolved when the tool runs, not only at registration", async () => {
+  let apiKey = ""
+  const tool = createAudioTool(() => ({
+    provider: "elevenlabs",
+    apiKey,
+    voiceId: "EXAVITQu4vr4xnSDxMaL",
+  }))
+  apiKey = "test-key"
+  const result = await tool.run(
+    { text: "late key" },
+    {
+      projectRoot,
+      requestPermission: async () => ({ granted: true }),
+      notify: () => {},
+      previewDiff: () => {},
+      mutate: diskMutate,
+    },
+  )
+  assert.match(result.output, /bytes of audio\/mpeg/)
+})
+
 test("a declined audio request produces no file", async () => {
-  const tool = createAudioTool({ provider: "elevenlabs", apiKey: "test-key", voiceId: "v" })
+  const tool = createAudioTool(() => ({ provider: "elevenlabs", apiKey: "test-key", voiceId: "v" }))
   const before = fs.readdirSync(projectRoot).length
   const result = await tool.run(
     { text: "declined" },
@@ -127,7 +163,7 @@ test("a declined audio request produces no file", async () => {
 })
 
 test("the audio tool explains a missing key and a missing voice", async () => {
-  const noKey = createAudioTool({ provider: "elevenlabs" })
+  const noKey = createAudioTool(() => ({ provider: "elevenlabs" }))
   await assert.rejects(
     () =>
       noKey.run(
@@ -143,7 +179,7 @@ test("the audio tool explains a missing key and a missing voice", async () => {
     /no ElevenLabs API key/,
   )
 
-  const noVoice = createAudioTool({ provider: "elevenlabs", apiKey: "k" })
+  const noVoice = createAudioTool(() => ({ provider: "elevenlabs", apiKey: "k" }))
   await assert.rejects(
     () =>
       noVoice.run(
