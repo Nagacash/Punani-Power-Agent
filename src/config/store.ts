@@ -305,10 +305,14 @@ function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean; m
   }
   if (Array.isArray(raw.mcp)) {
     config.mcp = raw.mcp
-      .filter((entry: any) => entry && typeof entry.name === "string" && typeof entry.command === "string")
+      .filter(
+        (entry: any) =>
+          entry && typeof entry.name === "string" && (typeof entry.command === "string" || typeof entry.url === "string"),
+      )
       .map((entry: any) => ({
         name: entry.name,
-        command: entry.command,
+        command: typeof entry.command === "string" ? entry.command : undefined,
+        url: typeof entry.url === "string" ? entry.url : undefined,
         args: Array.isArray(entry.args) ? entry.args.map(String) : undefined,
         env: entry.env && typeof entry.env === "object" ? entry.env : undefined,
         enabled: entry.enabled !== false,

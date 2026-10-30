@@ -219,10 +219,14 @@ export class Settings {
   setMcp(servers: McpServerConfig[]): { ok: boolean; error?: string } {
     if (!Array.isArray(servers)) return { ok: false, error: "expected a list of servers" }
     const clean = servers
-      .filter((server) => server && typeof server.name === "string" && typeof server.command === "string")
+      .filter(
+        (server) =>
+          server && typeof server.name === "string" && (typeof server.command === "string" || typeof server.url === "string"),
+      )
       .map((server) => ({
         name: server.name,
-        command: server.command,
+        command: typeof server.command === "string" ? server.command : undefined,
+        url: typeof server.url === "string" ? server.url : undefined,
         args: Array.isArray(server.args) ? server.args.map(String) : undefined,
         env: server.env && typeof server.env === "object" ? server.env : undefined,
         enabled: server.enabled !== false,
