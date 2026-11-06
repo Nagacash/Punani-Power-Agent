@@ -155,6 +155,7 @@ test("the prompt says to answer first, to respect a decline, and to sound human"
   assert.match(prompt, /No 'Great question'/)
   assert.match(prompt, /No em dash/)
   assert.match(prompt, /You can see images/)
+  assert.match(prompt, /Never run the file name into the word lines/)
 })
 
 test("a decline tells the model the answer is final", () => {
@@ -165,11 +166,15 @@ test("a decline tells the model the answer is final", () => {
   assert.match(message, /not now/)
 })
 
-test("the opencode skill folder is one of the roots", () => {
+test("the opencode skill folders are roots (XDG and ~/.opencode)", () => {
   const roots = defaultRoots("/tmp/project").map((root) => root.path)
   assert.ok(
-    roots.some((path) => path.endsWith("opencode/skills")),
-    "the opencode skills should be discovered",
+    roots.some((p) => p.endsWith(".config/opencode/skills")),
+    "XDG ~/.config/opencode/skills should be a root",
+  )
+  assert.ok(
+    roots.some((p) => p.endsWith(".opencode/skills")),
+    "~/.opencode/skills should be a root",
   )
 })
 

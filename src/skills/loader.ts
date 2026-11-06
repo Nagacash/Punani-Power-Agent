@@ -77,21 +77,40 @@ export function bundledRoot(): SkillRoot | undefined {
 
 /** Where skills are looked for, most specific first. */
 export function defaultRoots(projectRoot: string): SkillRoot[] {
+  const home = os.homedir()
   const roots: SkillRoot[] = [
     { path: path.join(projectRoot, ".punani", "skills"), source: "project" },
     { path: path.join(projectRoot, ".agents", "skills"), source: "project" },
     { path: path.join(projectRoot, ".claude", "skills"), source: "project" },
-    { path: path.join(os.homedir(), ".agents", "skills"), source: "agent" },
-    { path: path.join(os.homedir(), ".claude", "skills"), source: "claude" },
-    // Opencode keeps its own skills here. Without this root the agent cannot
-    // see the ones that only exist for opencode.
-    { path: path.join(os.homedir(), ".config", "opencode", "skills"), source: "opencode" },
+    { path: path.join(home, ".agents", "skills"), source: "agent" },
+    { path: path.join(home, ".claude", "skills"), source: "claude" },
+    // OpenCode-style layouts: XDG config and a home-dot directory (installers differ).
+    { path: path.join(home, ".config", "opencode", "skills"), source: "opencode" },
+    { path: path.join(home, ".opencode", "skills"), source: "opencode" },
   ]
   // The skills that ship with the app come last, so a project can replace
   // any of them with its own.
   const bundled = bundledRoot()
   if (bundled) roots.push(bundled)
-  return roots
+  return dedupeSkillRoots(roots)
+}
+
+/** Drop duplicate roots when two paths point at the same directory (symlinks). */
+function dedupeSkillRoots(roots: SkillRoot[]): SkillRoot[] {
+  const out: SkillRoot[] = []
+  const seen = new Set<string>()
+  for (const root of roots) {
+    let key: string
+    try {
+      key = fs.realpathSync(root.path)
+    } catch {
+      key = path.resolve(root.path)
+    }
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(root)
+  }
+  return out
 }
 
 /**

@@ -20,9 +20,11 @@ import { redactError } from "../core/redact.js"
 export interface McpServerConfig {
   /** Human label. Also the prefix for the tools it exposes. */
   name: string
-  /** The executable to run. */
-  command: string
+  /** The executable to run (stdio transport). Mutually exclusive with url. */
+  command?: string
   args?: string[]
+  /** Streamable HTTP endpoint (HTTP transport). Mutually exclusive with command. */
+  url?: string
   /** Extra environment for the child process. */
   env?: Record<string, string>
   /** Set to false to keep it configured but not start it. */
@@ -42,13 +44,24 @@ export interface McpToolResult {
   isError?: boolean
 }
 
+/** The surface both the stdio and HTTP MCP clients expose to the registry. */
+export interface McpSession {
+  name: string
+  connected: boolean
+  serverName?: string
+  availableTools: McpToolInfo[]
+  connect(): Promise<void>
+  callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>
+  close(): Promise<void>
+}
+
 interface Pending {
   resolve: (value: any) => void
   reject: (error: Error) => void
   timer: NodeJS.Timeout
 }
 
-export class McpClient {
+export class McpClient implements McpSession {
   private child?: ChildProcessWithoutNullStreams
   private buffer = ""
   private nextId = 1
@@ -78,6 +91,9 @@ export class McpClient {
   /** Start the process and complete the handshake. */
   async connect(): Promise<void> {
     if (this.child) return
+    if (!this.config.command) {
+      throw new Error(`the ${this.config.name} server has no command to run`)
+    }
     const timeout = (this.config.timeoutSeconds ?? 30) * 1000
 
     this.child = spawn(this.config.command, this.config.args ?? [], {
@@ -179,6 +195,162 @@ export class McpClient {
 
   private notify(method: string): void {
     this.child?.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method })}\n`)
+  }
+
+  private failAll(error: Error): void {
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timer)
+      entry.reject(error)
+    }
+    this.pending.clear()
+  }
+}
+
+/**
+ * A client for MCP servers that speak Streamable HTTP.
+ *
+ * The transport is JSON-RPC 2.0 over POST to a single URL. Each request is
+ * stateless; a session is:
+ *
+ *   -> POST { jsonrpc: "2.0", id: 1, method: "initialize", params: {...} }
+ *   <- { jsonrpc: "2.0", id: 1, result: { serverInfo: {...} } }
+ *   -> POST { jsonrpc: "2.0", method: "notifications/initialized" }
+ *   -> POST { jsonrpc: "2.0", id: 2, method: "tools/list" }
+ *   <- { jsonrpc: "2.0", id: 2, result: { tools: [...] } }
+ */
+export class McpHttpClient implements McpSession {
+  private readonly config: McpServerConfig
+  private nextId = 1
+  private readonly pending = new Map<number, Pending>()
+  private serverInfo?: { name?: string; version?: string }
+  private tools: McpToolInfo[] = []
+  private closed = false
+
+  constructor(config: McpServerConfig) {
+    this.config = config
+  }
+
+  get name(): string {
+    return this.config.name
+  }
+
+  get connected(): boolean {
+    return Boolean(this.serverInfo) && !this.closed
+  }
+
+  get serverName(): string | undefined {
+    return this.serverInfo?.name
+  }
+
+  get availableTools(): McpToolInfo[] {
+    return this.tools
+  }
+
+  /** Complete the initialize handshake and list tools. */
+  async connect(): Promise<void> {
+    if (this.closed) return
+    const timeout = (this.config.timeoutSeconds ?? 30) * 1000
+
+    const result = await this.request(
+      "initialize",
+      {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        clientInfo: { name: "punani-powerd", version },
+      },
+      timeout,
+    )
+    this.serverInfo = result?.serverInfo
+
+    await this.notify("notifications/initialized")
+
+    const listed = await this.request("tools/list", {}, timeout)
+    this.tools = Array.isArray(listed?.tools) ? listed.tools : []
+    log.info(`mcp ${this.config.name} connected over http with ${this.tools.length} tools`)
+  }
+
+  /** Call one of the server's tools over HTTP. */
+  async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
+    const result = await this.request(
+      "tools/call",
+      { name, arguments: args },
+      (this.config.timeoutSeconds ?? 60) * 1000,
+    )
+    return { content: result?.content ?? [], isError: result?.isError === true }
+  }
+
+  /** No background process to stop; just mark the session closed. */
+  async close(): Promise<void> {
+    this.closed = true
+    this.failAll(new Error("the http session was closed"))
+  }
+
+  private request(method: string, params: unknown, timeoutMs: number): Promise<any> {
+    if (this.closed || !this.config.url) {
+      return Promise.reject(new Error(`the ${this.config.name} server is not running`))
+    }
+    const id = this.nextId++
+    const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params })
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`the ${this.config.name} server did not answer ${method} in time`))
+      }, timeoutMs)
+      this.pending.set(id, { resolve, reject, timer })
+      void fetch(this.config.url!, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: payload,
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+        .then(async (response) => {
+          clearTimeout(timer)
+          const entry = this.pending.get(id)
+          if (!entry) return
+          this.pending.delete(id)
+          if (!response.ok) {
+            entry.reject(new Error(`the ${this.config.name} server answered ${response.status} ${response.statusText}`))
+            return
+          }
+          const text = await response.text()
+          let message: any
+          try {
+            message = JSON.parse(text)
+          } catch {
+            entry.reject(new Error(`the ${this.config.name} server returned invalid JSON`))
+            return
+          }
+          if (typeof message?.id !== "number" || message.id !== id) {
+            entry.reject(new Error(`the ${this.config.name} server returned a mismatched response id`))
+            return
+          }
+          if (message.error) {
+            entry.reject(new Error(message.error.message ?? "the MCP server returned an error"))
+          } else {
+            entry.resolve(message.result)
+          }
+        })
+        .catch((error) => {
+          clearTimeout(timer)
+          const entry = this.pending.get(id)
+          if (!entry) return
+          this.pending.delete(id)
+          if ((error as Error)?.name === "AbortError" || /timed out/i.test((error as Error).message)) {
+            entry.reject(new Error(`the ${this.config.name} server did not answer ${method} in time`))
+          } else {
+            entry.reject(error as Error)
+          }
+        })
+    })
+  }
+
+  private notify(method: string): void {
+    if (this.closed || !this.config.url) return
+    void fetch(this.config.url!, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", method }),
+    }).catch((error) => log.debug(`mcp ${this.config.name} notify ${method} failed: ${(error as Error).message}`))
   }
 
   private failAll(error: Error): void {

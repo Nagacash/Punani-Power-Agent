@@ -1,4 +1,4 @@
-import { McpClient, type McpServerConfig, type McpToolInfo } from "./client.js"
+import { McpClient, McpHttpClient, type McpServerConfig, type McpSession, type McpToolInfo } from "./client.js"
 import { ToolError } from "../tool/fsutil.js"
 import type { Tool, ToolContext, ToolResult } from "../tool/types.js"
 
@@ -15,7 +15,7 @@ function wireName(server: string, tool: string): string {
 }
 
 /** Build a tool that calls one MCP tool. */
-function toTool(server: McpServerConfig, client: McpClient, info: McpToolInfo): Tool {
+function toTool(server: McpServerConfig, client: McpSession, info: McpToolInfo): Tool {
   return {
     name: wireName(server.name, info.name),
     description: `[${server.name}] ${info.description || info.name}`,
@@ -68,7 +68,7 @@ function toTool(server: McpServerConfig, client: McpClient, info: McpToolInfo): 
  * never stops the agent: it is reported and the rest carry on.
  */
 export class McpRegistry {
-  private readonly clients = new Map<string, McpClient>()
+  private readonly clients = new Map<string, McpSession>()
   private readonly tools: Tool[] = []
   readonly problems: string[] = []
 
@@ -83,7 +83,7 @@ export class McpRegistry {
 
     await Promise.all(
       enabled.map(async (server) => {
-        const client = new McpClient(server)
+        const client: McpSession = server.url ? new McpHttpClient(server) : new McpClient(server)
         try {
           await client.connect()
           this.clients.set(server.name, client)

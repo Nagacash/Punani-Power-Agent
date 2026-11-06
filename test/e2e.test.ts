@@ -9,6 +9,7 @@ import { ProviderRegistry } from "../src/provider/registry.ts"
 import { LlmClient } from "../src/llm/client.ts"
 import { BUILTIN_TOOLS } from "../src/tool/registry.ts"
 import { runAgentTurn } from "../src/agent/agent.ts"
+import { messageText } from "../src/llm/client.ts"
 import { PermissionEngine, checkPermission } from "../src/agent/permission.ts"
 import { SessionStore, toChatMessages } from "../src/session/store.ts"
 import { diskMutate } from "../src/tool/fsutil.ts"
@@ -168,11 +169,11 @@ test("the agent reads a file through a tool call and answers", async () => {
 
   const toolMessage = result.messages.find((message) => message.role === "tool")
   assert.ok(toolMessage, "a tool result should be in the message list")
-  assert.match(toolMessage!.content ?? "", /greeting from the sample project/)
+  assert.match(messageText(toolMessage!), /greeting from the sample project/)
 
   const last = result.messages[result.messages.length - 1]!
   assert.equal(last.role, "assistant")
-  assert.match(last.content ?? "", /greets you/)
+  assert.match(messageText(last), /greets you/)
 
   // The provider must have received the tool definition and the tool result.
   const chatRequests = seenRequests.filter((entry) => entry.url === "/v1/chat/completions")
@@ -310,7 +311,7 @@ test("a config written before the rules changed is brought forward", async () =>
   const config = new ConfigStore(file)
   const engine = new PermissionEngine(config.permissions())
   const onDisk = JSON.parse(fs.readFileSync(file, "utf8"))
-  assert.equal(onDisk.permissionsVersion, 2, "migration is written back so it does not repeat every launch")
+  assert.equal(onDisk.permissionsVersion, 3, "migration is written back so it does not repeat every launch")
   // The old defaults are replaced.
   assert.equal(engine.decide("edit", "src/app.ts").effect, "allow")
   assert.equal(engine.decide("write", "src/app.ts").effect, "allow")

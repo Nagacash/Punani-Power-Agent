@@ -68,8 +68,16 @@ const MEDIA: Record<string, "image" | "video" | "audio"> = {
 }
 
 /** The kind of a file, when the pane can show it. */
-function mediaKind(name: string): "image" | "video" | "audio" | undefined {
+export function mediaKindForFilename(name: string): "image" | "video" | "audio" | undefined {
   return MEDIA[path.extname(name).toLowerCase()]
+}
+
+function mediaKind(name: string): "image" | "video" | "audio" | undefined {
+  return mediaKindForFilename(name)
+}
+
+export function mimeForFilename(name: string): string {
+  return MIME[path.extname(name).toLowerCase()] ?? "application/octet-stream"
 }
 
 const IGNORED = new Set([

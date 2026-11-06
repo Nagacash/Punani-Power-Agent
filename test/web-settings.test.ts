@@ -19,7 +19,21 @@ test("saving a speech key turns on ElevenLabs when still off", () => {
   assert.equal(audio.provider, "elevenlabs")
   assert.equal(audio.apiKey, undefined)
   assert.equal(store.elevenLabsKey(), "test-eleven-key")
-  assert.equal(store.get().apiKeys.elevenlabs, "test-eleven-key")
+  assert.equal(store.get().mediaKeys.elevenlabs, "test-eleven-key")
+})
+
+test("settings can turn on Kling video", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "punani-settings-video-"))
+  const file = path.join(dir, "config.json")
+  const store = new ConfigStore(file)
+  store.load()
+  const settings = new Settings(store)
+
+  const result = settings.setVideo({ provider: "kling", model: "kling-video-v2_5", defaultDurationSeconds: 5 })
+  assert.equal(result.ok, true)
+  assert.equal(store.videoSettings().provider, "kling")
+  assert.equal(store.videoSettings().model, "kling-video-v2_5")
+  assert.equal(store.videoSettings().defaultDurationSeconds, 5)
 })
 
 test("saving an image key turns on openai-compatible when still off", () => {

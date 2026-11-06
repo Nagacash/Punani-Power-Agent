@@ -235,13 +235,34 @@ function loadProject(deps: AppDeps, root: string): Tool[] {
   }
 
   return [
-    ...buildTools(config.resolvedImageSettings(), config.resolvedAudioSettings(), deps.mcpTools ?? []),
+    ...buildTools(
+      () => config.resolvedImageSettings(),
+      () => config.resolvedAudioSettings(),
+      deps.mcpTools ?? [],
+      () => config.videoSettings(),
+    ),
     ...createSkillTools(groups, skills),
+  ]
+}
+
+/** Rebuild built-in tools after config changed on disk (e.g. `/audio key`). */
+function refreshToolsFromConfig(deps: AppDeps): void {
+  deps.config.reloadFromDiskIfNewer()
+  const skillTools = deps.state.tools.filter((tool) => tool.name.startsWith("skill_"))
+  deps.state.tools = [
+    ...buildTools(
+      () => deps.config.resolvedImageSettings(),
+      () => deps.config.resolvedAudioSettings(),
+      deps.mcpTools ?? [],
+      () => deps.config.videoSettings(),
+    ),
+    ...skillTools,
   ]
 }
 
 /** Run one agent turn and record the result in the session. */
 async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<void> {
+  refreshToolsFromConfig(deps)
   const { registry, projectRoot, ask, sessions } = deps
   const model = deps.state.model
   const session = deps.state.session
@@ -321,6 +342,7 @@ async function runTurn(deps: AppDeps, permissions: PermissionEngine): Promise<vo
     {
       image: deps.config.imageSettings().provider !== "none",
       audio: deps.config.audioSettings().provider !== "none",
+      video: deps.config.videoSettings().provider !== "none",
       vision: model.vision,
     },
     deps.promptParts ?? {},
@@ -454,13 +476,24 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
         if (!assistantStreaming) {
           endReasoning()
           reply = createPlainStream()
-          process.stdout.write(`\n${style.blue(symbol.arrow)} `)
+          // Ensure clean line break before assistant reply
+          if (reasoningOpen) {
+            process.stdout.write("\n")
+            reasoningOpen = false
+            reasoningLines = 0
+          }
+          process.stdout.write(`${style.blue(symbol.arrow)} `)
           assistantStreaming = true
         }
         process.stdout.write(plainStream(event.text, reply))
       } else if (event.text) {
         endReasoning()
         endAssistantStream()
+        // Ensure assistant line starts on its own line, after any reasoning
+        if (reasoningOpen) {
+          process.stdout.write("\n")
+          reasoningOpen = false
+        }
         assistantLine(plainText(event.text))
       }
       break
@@ -468,13 +501,19 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
       stopSpinner()
       if (event.text) {
         if (!reasoningOpen) {
-          endAssistantStream()
-          process.stdout.write(`\n${style.gray("  thinking")}\n`)
+          // Start reasoning with a clear "thinking" indicator
+          process.stdout.write("\n  thinking\n")
           reasoningOpen = true
           reasoningAtLineStart = true
           reasoningLines = 0
         }
         writeReasoning(event.text)
+      } else {
+        // Reasoning completed without new text - close thinking section cleanly
+        if (reasoningOpen) {
+          process.stdout.write("\n")
+          reasoningOpen = false
+        }
       }
       break
     case "tool_start":
@@ -1190,6 +1229,81 @@ async function handleCommand(
       return "handled"
     }
 
+    case "video": {
+      const current = config.videoSettings()
+      if (!argument) {
+        infoLine(`provider: ${current.provider}`)
+        if (current.model) infoLine(`model:    ${current.model}`)
+        if (current.defaultDurationSeconds) infoLine(`default duration: ${current.defaultDurationSeconds}s`)
+        if (current.outputDir) infoLine(`output:   ${current.outputDir}`)
+        infoLine("set with: /video kling [model] | /video off")
+        infoLine("optional: /video default-duration <seconds>   (e.g. 5 for shorter, cheaper clips)")
+        return "handled"
+      }
+      const [kind, ...rest] = rest0(argument)
+      if (kind === "off" || kind === "none") {
+        config.setVideoSettings({ provider: "none" })
+        successLine("video generation is off")
+        return "handled"
+      }
+      if (kind === "default-duration" || kind === "duration") {
+        const sec = Number(rest[0])
+        if (!Number.isFinite(sec) || sec <= 0) {
+          errorLine("usage: /video default-duration <seconds>")
+          return "handled"
+        }
+        config.setVideoSettings({ ...current, defaultDurationSeconds: Math.round(sec) })
+        successLine(`default clip length is now ${Math.round(sec)}s`)
+        return "handled"
+      }
+      if (kind === "kling") {
+        const identity = await klingWhoAmI()
+        if (!identity.loggedIn) {
+          warnLine(identity.error ?? "not signed in to Kling")
+          const go = (await ask(`${style.green("›")} sign in to Kling now? (y/n) `)).trim().toLowerCase()
+          if (go !== "y" && go !== "yes") {
+            infoLine("run `kling login` yourself, then: /video kling <model>")
+            return "handled"
+          }
+          infoLine("a browser window will open for the Kling sign-in.")
+          const result = await klingLogin()
+          if (!result.ok) {
+            errorLine("the Kling sign-in did not complete. Run `kling login` and try again.")
+            return "handled"
+          }
+          successLine("signed in to Kling")
+        }
+        const identityAfter = identity.loggedIn ? identity : await klingWhoAmI()
+        const models = identityAfter.videoModels.length ? identityAfter.videoModels : identityAfter.models
+        if (models.length > 0) {
+          process.stdout.write(`\n  ${style.bold("Kling video models")}\n`)
+          models.slice(0, 15).forEach((model, index) => {
+            process.stdout.write(`   ${style.cyan(String(index + 1).padStart(2))}) ${model}\n`)
+          })
+        }
+        const chosen = rest[0] ?? (models.length === 1 ? models[0] : undefined)
+        if (!chosen) {
+          const picked = (await ask(`${style.green("›")} model number or name (blank to skip): `)).trim()
+          const index = Number(picked)
+          const model = Number.isInteger(index) && index > 0 ? models[index - 1] : picked || undefined
+          if (!model) {
+            config.setVideoSettings({ ...current, provider: "kling" })
+            successLine("video will be generated with the kling CLI")
+            infoLine("pick a model later with: /video kling <model>")
+            return "handled"
+          }
+          config.setVideoSettings({ ...current, provider: "kling", model })
+          successLine(`video will be generated with kling using ${model}`)
+          return "handled"
+        }
+        config.setVideoSettings({ ...current, provider: "kling", model: chosen })
+        successLine(`video will be generated with kling using ${chosen}`)
+        return "handled"
+      }
+      errorLine("usage: /video [kling [model] | default-duration <seconds> | off]")
+      return "handled"
+    }
+
     case "permissions": {
       if (!argument) {
         for (const action of [
@@ -1292,6 +1406,7 @@ async function handleCommand(
         {
           image: deps.config.imageSettings().provider !== "none",
           audio: deps.config.audioSettings().provider !== "none",
+          video: deps.config.videoSettings().provider !== "none",
           vision: model.vision,
         },
         deps.promptParts ?? { catalog: "" },
@@ -1337,6 +1452,7 @@ const COMMANDS: [string, string][] = [
     ["/context", "show the system prompt"],
     ["/config", "show config paths and permissions"],
     ["/image", "configure image generation (kling or an OpenAI-compatible endpoint)"],
+    ["/video", "configure short video generation (Kling CLI; same login as image)"],
     ["/keys", "store or remove an API key, without typing it on screen"],
     ["/mcp", "add, list or remove MCP servers"],
     ["/skills", "list the skills available to the agent"],

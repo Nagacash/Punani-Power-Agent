@@ -3,6 +3,7 @@ import { KNOWN_MCP_SERVERS } from "../mcp/client.js"
 import type { McpServerConfig } from "../mcp/client.js"
 import type { ImageSettings } from "../tool/image.js"
 import type { AudioSettings } from "../tool/audio.js"
+import type { VideoSettings } from "../tool/video.js"
 import { redact } from "../core/redact.js"
 import { log } from "../core/logger.js"
 
@@ -19,7 +20,10 @@ import { log } from "../core/logger.js"
  *      frontends edit one file.
  */
 
+export type MediaKeySlot = (typeof MEDIA_API_KEY_IDS)[number]
+
 export interface SettingsView {
+  mediaKeys: Record<MediaKeySlot, { hasDiskKey: boolean }>
   providers: {
     id: string
     name: string
@@ -32,6 +36,7 @@ export interface SettingsView {
     builtin: boolean
   }[]
   image: Omit<ImageSettings, "apiKey"> & { hasKey: boolean }
+  video: VideoSettings
   audio: Omit<AudioSettings, "apiKey"> & { hasKey: boolean }
   mcp: McpServerConfig[]
   knownMcp: { name: string; note: string; command: string }[]
@@ -61,20 +66,30 @@ export class Settings {
     })
 
     const image = { ...stored.image }
+    const video = { ...(stored.video ?? { provider: "none" as const }) }
     const audio = { ...stored.audio }
+    const mk = stored.mediaKeys ?? {}
     const imageHasKey =
       image.provider === "kling"
-        ? Boolean(stored.apiKeys.kling)
+        ? Boolean(mk.kling)
         : image.provider === "openai-compatible"
-          ? Boolean(stored.apiKeys.fal)
+          ? Boolean(mk.fal)
           : false
-    const audioHasKey = Boolean(stored.apiKeys.elevenlabs)
+    const audioHasKey = Boolean(mk.elevenlabs)
     delete (image as any).apiKey
     delete (audio as any).apiKey
 
+    const mediaKeys = {
+      elevenlabs: { hasDiskKey: Boolean(mk.elevenlabs) },
+      kling: { hasDiskKey: Boolean(mk.kling) },
+      fal: { hasDiskKey: Boolean(mk.fal) },
+    } satisfies Record<MediaKeySlot, { hasDiskKey: boolean }>
+
     return {
+      mediaKeys,
       providers,
       image: { ...image, hasKey: imageHasKey },
+      video,
       audio: { ...audio, hasKey: audioHasKey },
       mcp: stored.mcp.map((server) => ({
         ...server,
@@ -145,6 +160,19 @@ export class Settings {
     return { ok: true }
   }
 
+  /** Short video via Kling CLI (same OAuth as image). */
+  setVideo(input: Partial<VideoSettings>): { ok: boolean; error?: string } {
+    const current = this.config.videoSettings()
+    const next: VideoSettings = { ...current }
+    if (input.provider !== undefined) next.provider = input.provider === "kling" ? "kling" : "none"
+    if (input.model !== undefined) next.model = input.model
+    if (input.outputDir !== undefined) next.outputDir = input.outputDir
+    if (input.timeoutSeconds !== undefined) next.timeoutSeconds = input.timeoutSeconds
+    if (input.defaultDurationSeconds !== undefined) next.defaultDurationSeconds = input.defaultDurationSeconds
+    this.config.setVideoSettings(next)
+    return { ok: true }
+  }
+
   /** The image backend. */
   setImage(input: Partial<ImageSettings> & { apiKey?: string }): { ok: boolean; error?: string } {
     const current = this.config.imageSettings()
@@ -172,7 +200,8 @@ export class Settings {
     if (!MEDIA_API_KEY_IDS.includes(id)) return { ok: false, error: `unknown media key "${id}"` }
     const value = key.trim()
     if (!value) return { ok: false, error: "the key was empty" }
-    this.config.setMediaKey(id, value)
+    const result = this.config.setMediaKey(id, value)
+    if (!result.ok) return result
     log.info(`settings: stored media key ${id}`)
     return { ok: true }
   }
@@ -207,10 +236,14 @@ export class Settings {
   setMcp(servers: McpServerConfig[]): { ok: boolean; error?: string } {
     if (!Array.isArray(servers)) return { ok: false, error: "expected a list of servers" }
     const clean = servers
-      .filter((server) => server && typeof server.name === "string" && typeof server.command === "string")
+      .filter(
+        (server) =>
+          server && typeof server.name === "string" && (typeof server.command === "string" || typeof server.url === "string"),
+      )
       .map((server) => ({
         name: server.name,
-        command: server.command,
+        command: typeof server.command === "string" ? server.command : undefined,
+        url: typeof server.url === "string" ? server.url : undefined,
         args: Array.isArray(server.args) ? server.args.map(String) : undefined,
         env: server.env && typeof server.env === "object" ? server.env : undefined,
         enabled: server.enabled !== false,

@@ -14,6 +14,8 @@ export interface KlingWhoAmI {
   models: string[]
   /** The models reported specifically for text_to_image. */
   imageModels: string[]
+  /** The models reported specifically for text_to_video. */
+  videoModels: string[]
   raw: string
   error?: string
 }
@@ -98,6 +100,7 @@ export async function whoAmI(): Promise<KlingWhoAmI> {
         loggedIn: false,
         models: [],
         imageModels: [],
+        videoModels: [],
         raw: "",
         error:
           "the `kling` command was not found. Install it with: npm i -g @klingai/cli-global (or @klingai/cli-cn for the China region).",
@@ -107,6 +110,7 @@ export async function whoAmI(): Promise<KlingWhoAmI> {
       loggedIn: false,
       models: [],
       imageModels: [],
+      videoModels: [],
       raw: "",
       error: `could not run the kling CLI: ${(error as Error).message}`,
     }
@@ -119,6 +123,7 @@ export async function whoAmI(): Promise<KlingWhoAmI> {
       loggedIn: false,
       models: [],
       imageModels: [],
+      videoModels: [],
       raw,
       error: needsLogin
         ? "not signed in to Kling. Run `kling login` to sign in."
@@ -146,6 +151,7 @@ export async function whoAmI(): Promise<KlingWhoAmI> {
     loggedIn: true,
     models: [...all].sort(),
     imageModels: payload ? modelsForTool(payload, "text_to_image") : [],
+    videoModels: payload ? modelsForTool(payload, "text_to_video") : [],
     raw,
   }
 }

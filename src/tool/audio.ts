@@ -42,7 +42,16 @@ function timestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)
 }
 
-export function createAudioTool(settings: AudioSettings): Tool {
+/** Avoid `assets/audio/` + `assets/audio/file.mp3` when the model passes a full relative path. */
+function resolveAudioOutputPath(outputDir: string, pathArg: string | undefined, defaultName: string): string {
+  if (!pathArg) return path.posix.join(outputDir, defaultName)
+  const name = pathArg.replace(/\\/g, "/").replace(/^\/+/, "")
+  if (name.startsWith(`${outputDir}/`) || name === outputDir) return name
+  if (name.includes("/")) return name
+  return path.posix.join(outputDir, name)
+}
+
+export function createAudioTool(getSettings: () => AudioSettings): Tool {
   return {
     name: "audio",
     description:
@@ -61,6 +70,7 @@ export function createAudioTool(settings: AudioSettings): Tool {
       required: ["text"],
     },
     async run(args: any, context: ToolContext): Promise<ToolResult> {
+      const settings = getSettings()
       const text = String(args.text ?? "").trim()
       if (!text) throw new ToolError("text must not be empty")
       if (!settings.provider || settings.provider === "none") {
@@ -71,8 +81,11 @@ export function createAudioTool(settings: AudioSettings): Tool {
 
       const outputDir = settings.outputDir ?? DEFAULT_OUTPUT_DIR
       const extension = extensionFor(settings.outputFormat)
-      const name = args.path ? String(args.path) : `${slugify(text)}-${timestamp()}.${extension}`
-      const relative = path.posix.join(outputDir, name)
+      const relative = resolveAudioOutputPath(
+        outputDir,
+        args.path ? String(args.path) : undefined,
+        `${slugify(text)}-${timestamp()}.${extension}`,
+      )
       const target = ensureInsideProject(context.projectRoot, relative)
 
       const outcome = await context.requestPermission({

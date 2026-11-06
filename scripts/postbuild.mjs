@@ -44,8 +44,15 @@ const bundled = path.join(root, "bundled")
 if (fs.existsSync(bundled)) {
   const to = path.join(root, "dist", "bundled")
   fs.rmSync(to, { recursive: true, force: true })
-  fs.cpSync(bundled, to, { recursive: true })
-  console.log("postbuild: copied bundled")
+  try {
+    fs.cpSync(bundled, to, { recursive: true })
+    console.log("postbuild: copied bundled")
+  } catch (error) {
+    if (error?.code !== "ENOSPC") throw error
+    fs.rmSync(to, { recursive: true, force: true })
+    fs.symlinkSync(bundled, to, "dir")
+    console.warn("postbuild: disk full — symlinked bundled/ (use a full copy before npm publish)")
+  }
 } else {
   console.warn("postbuild: no bundled directory, the app ships without its own skills")
 }

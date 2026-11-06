@@ -2,8 +2,9 @@
  * A spinner for the terminal.
  *
  * The agent is often quiet for a while: a model that thinks, a tool that
- * runs, a provider that queues. Silence reads as a hang, so the spinner
- * says the turn is still alive.
+ * runs, a provider that queues, or a skill that processes. Silence reads
+ * as a hang, so the spinner says the turn is still alive. The label
+ * reflects the current activity so the user knows the agent is working.
  */
 
 import { style, visibleWidth } from "./theme.js"
@@ -37,12 +38,15 @@ export function startSpinner(text: string): void {
     render(frame)
   }, INTERVAL_MS)
   timer.unref?.()
+  // Ensure the label is visible immediately on start
+  render(0)
 }
 
 /** Change what the spinner says, without interrupting it. */
 export function setSpinnerLabel(text: string): void {
   if (!enabled) return
   label = text
+  render(0)
 }
 
 /** Stop the spinner and clear the line it drew. */

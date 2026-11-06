@@ -13,6 +13,7 @@ import {
   xmlEscape,
 } from "../src/skills/loader.ts"
 import { createSkillTools } from "../src/tool/skill.ts"
+import type { Tool } from "../src/tool/types.ts"
 
 function writeSkill(root: string, dir: string, frontmatter: string, body = "# Skill\n\nDo the thing.\n") {
   const target = path.join(root, dir)
@@ -145,7 +146,7 @@ test("the skill tools list, search and load", async () => {
   writeSkill(root, "design-two", "name: design-two\ndescription: More visual design guidance.\n")
   const skills = discoverSkills([{ path: root, source: "test" }])
   const groups = groupSkills(skills)
-  const [list, search, load] = createSkillTools(groups, skills)
+  const [list, search, load] = createSkillTools(groups, skills) as [Tool, Tool, Tool]
 
   const listed = await list.run({ group: "design" }, {} as any)
   assert.match(listed.output, /design-one/)
