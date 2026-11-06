@@ -855,9 +855,15 @@ export class WebServer {
    * The path is resolved and checked to be inside the project root, so this
    * cannot be used to read files elsewhere on the machine.
    */
-  /** Normalize ?path= from the UI (no leading slash, collapse duplicate output folders). */
-  private normalizeFileQueryPath(requested: string): string {
-    let relative = requested.replace(/\\/g, "/").replace(/^\/+/, "").trim()
+  /**
+   * Normalize ?path= from the UI: project-relative only, collapse duplicate output folders.
+   * Absolute paths (e.g. `/etc/passwd`) are rejected so stripping `/` cannot map them inside the project.
+   */
+  private normalizeFileQueryPath(requested: string): string | undefined {
+    const raw = requested.replace(/\\/g, "/").trim()
+    if (!raw) return undefined
+    if (path.isAbsolute(raw)) return undefined
+    let relative = raw.replace(/^\/+/, "")
     while (relative.includes("assets/generated/assets/generated/")) {
       relative = relative.replace("assets/generated/assets/generated/", "assets/generated/")
     }
@@ -870,7 +876,7 @@ export class WebServer {
   /** Resolve a project-relative path from a query param; rejects escapes. */
   private resolveProjectFile(requested: string): { relative: string; absolute: string } | undefined {
     const normalized = this.normalizeFileQueryPath(requested)
-    if (!normalized) return undefined
+    if (normalized === undefined || normalized === "") return undefined
     const target = path.resolve(this.projectRoot, normalized)
     const relative = path.relative(this.projectRoot, target)
     if (relative.startsWith("..") || path.isAbsolute(relative)) return undefined
@@ -1291,6 +1297,10 @@ export class WebServer {
         const result = this.settings.setAudio(body)
         return json(response, result, result.ok ? 200 : 400)
       }
+      case "settings-video": {
+        const result = this.settings.setVideo(body)
+        return json(response, result, result.ok ? 200 : 400)
+      }
       case "settings-mcp": {
         const result = this.settings.setMcp(body.servers)
         return json(response, result, result.ok ? 200 : 400)
@@ -1477,6 +1487,10 @@ export class WebServer {
           return this.config.resolvedAudioSettings(this.mediaKeyOverrides())
         },
         this.mcpTools,
+        () => {
+          this.config.reloadFromDiskIfNewer()
+          return this.config.videoSettings()
+        },
       ),
       ...this.skillTools,
     ]
@@ -1553,6 +1567,7 @@ export class WebServer {
       {
         image: imageSettings.provider !== "none",
         audio: audioSettings.provider !== "none",
+        video: this.config.videoSettings().provider !== "none",
         vision: this.model?.vision === true,
       },
       {

@@ -612,9 +612,11 @@ The agent reads a library of instruction folders, the same shape the
 `name:` and `description:` in the frontmatter.
 
 Your skills on this machine are already in that format, in `~/.agents/skills`,
-`~/.claude/skills` and `~/.config/opencode/skills`, plus any you drop in
+`~/.claude/skills`, `~/.config/opencode/skills`, and `~/.opencode/skills`
+(some OpenCode installers use only one of those), plus any you drop in
 `<project>/.punani/skills`. A skill behind a symlink counts too. The library
-stays where it is and keeps updating.
+stays where it is and keeps updating. If two paths are the same directory on
+disk, only one root is kept.
 
 The app ships two skills of its own, and they come last, so a project can
 replace either of them with its own:

@@ -6,6 +6,7 @@ import { BUILTIN_PROVIDERS, type ModelOverride } from "../provider/builtin.js"
 import type { ProviderConfig, ReasoningEffort } from "../provider/types.js"
 import type { ImageSettings } from "../tool/image.js"
 import type { AudioSettings } from "../tool/audio.js"
+import type { VideoSettings } from "../tool/video.js"
 import { resolveTtsModelId } from "../provider/elevenlabs.js"
 import type { McpServerConfig } from "../mcp/client.js"
 
@@ -46,6 +47,8 @@ export interface ConfigFile {
   headers: Record<string, Record<string, string>>
   /** Image generation backend. */
   image: ImageSettings
+  /** Short video generation (Kling CLI). */
+  video: VideoSettings
   /** Speech generation backend. */
   audio: AudioSettings
   /** MCP servers to start with the agent. */
@@ -71,6 +74,8 @@ export const DEFAULT_PERMISSIONS: Record<string, PermissionRule[]> = {
   edit: [{ pattern: "*", effect: "allow" }],
   bash: [{ pattern: "*", effect: "allow" }],
   fetch: [{ pattern: "*", effect: "allow" }],
+  /** Paid media generations: ask by default so burns are visible. */
+  video: [{ pattern: "*", effect: "ask" }],
   // These ask. The first pair can overwrite what is there; the last can
   // delete it.
   "write-destructive": [{ pattern: "*", effect: "ask" }],
@@ -105,7 +110,7 @@ const LEGACY_PERMISSIONS: Record<string, PermissionRule[]> = {
  *
  * Bumped when the defaults change, so a config can be brought forward.
  */
-export const PERMISSIONS_VERSION = 2
+export const PERMISSIONS_VERSION = 3
 
 /** Media backends store keys here — not duplicated under `image` / `audio`. */
 export const MEDIA_API_KEY_IDS = ["elevenlabs", "kling", "fal"] as const
@@ -185,6 +190,7 @@ function emptyConfig(): ConfigFile {
     permissionsVersion: PERMISSIONS_VERSION,
     headers: {},
     image: { provider: "none" },
+    video: { provider: "none" },
     audio: { provider: "none" },
     mcp: [],
   }
@@ -209,6 +215,7 @@ function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean; m
     permissionsVersion: PERMISSIONS_VERSION,
     headers: {},
     image: { provider: "none" },
+    video: { provider: "none" },
     audio: { provider: "none" },
     mcp: [],
   }
@@ -288,6 +295,19 @@ function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean; m
     }
     if (config.image.apiKey) registerSecret(config.image.apiKey)
   }
+  if (raw.video && typeof raw.video === "object") {
+    const video = raw.video
+    config.video = {
+      provider: video.provider === "kling" ? "kling" : "none",
+      model: typeof video.model === "string" ? video.model : undefined,
+      outputDir: typeof video.outputDir === "string" ? video.outputDir : undefined,
+      timeoutSeconds: Number(video.timeoutSeconds) || undefined,
+      defaultDurationSeconds:
+        Number.isFinite(Number(video.defaultDurationSeconds)) && Number(video.defaultDurationSeconds) > 0
+          ? Number(video.defaultDurationSeconds)
+          : undefined,
+    }
+  }
   if (raw.audio && typeof raw.audio === "object") {
     const audio = raw.audio
     config.audio = {
@@ -326,7 +346,12 @@ function coerce(raw: any): { config: ConfigFile; migratedPermissions: boolean; m
   }
   const migratedMedia = normalizeMediaKeys(config)
   const migratedAudio = normalizeAudioSettings(config)
-  return { config, migratedPermissions, migratedMedia: migratedMedia || migratedAudio }
+  let migratedVideo = false
+  if (!config.video || typeof config.video !== "object") {
+    config.video = { provider: "none" }
+    migratedVideo = true
+  }
+  return { config, migratedPermissions, migratedMedia: migratedMedia || migratedAudio || migratedVideo }
 }
 
 export class ConfigStore {
@@ -613,6 +638,26 @@ export class ConfigStore {
       if (next.provider === "kling") this.setMediaKey("kling", value)
       else if (next.provider === "openai-compatible") this.setMediaKey("fal", value)
     }
+    this.save()
+  }
+
+  videoSettings(): VideoSettings {
+    return this.get().video
+  }
+
+  setVideoSettings(settings: VideoSettings): void {
+    const config = this.get()
+    const next: VideoSettings = {
+      provider: settings.provider === "kling" ? "kling" : "none",
+      model: settings.model === "" ? undefined : typeof settings.model === "string" ? settings.model : undefined,
+      outputDir: typeof settings.outputDir === "string" ? settings.outputDir : undefined,
+      timeoutSeconds: Number(settings.timeoutSeconds) || undefined,
+      defaultDurationSeconds:
+        Number.isFinite(Number(settings.defaultDurationSeconds)) && Number(settings.defaultDurationSeconds) > 0
+          ? Number(settings.defaultDurationSeconds)
+          : undefined,
+    }
+    config.video = next
     this.save()
   }
 

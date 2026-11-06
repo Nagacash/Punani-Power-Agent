@@ -646,7 +646,7 @@
               <div class="tags">
                 <span>read &middot; write &middot; edit</span>
                 <span>search &middot; run</span>
-                <span>image &middot; voice</span>
+                <span>image &middot; video &middot; voice</span>
               </div>
             </div>
           </div>
@@ -2405,6 +2405,7 @@
       function mediaTab() {
         const wrap = document.createElement("div");
         const image = settingsData.image;
+        const video = settingsData.video ?? { provider: "none" };
         const audio = settingsData.audio;
         const mk = settingsData.mediaKeys ?? {};
 
@@ -2552,6 +2553,62 @@
         img.appendChild(falKeyWrap);
         syncImageKeys();
         wrap.appendChild(img);
+
+        const vid = document.createElement("div");
+        vid.className = "row-card";
+        vid.innerHTML = `<div class="top"><span class="nm">video</span>
+          <span class="tag ${video.provider === "none" ? "warn" : "ok"}">${esc(video.provider)}</span></div>
+          <div class="sub">Short clips via Kling CLI (same sign-in as images). Saves MP4 under assets/generated.</div>`;
+        const vidField = document.createElement("div");
+        vidField.className = "field";
+        const vidBackend = document.createElement("select");
+        for (const [value, label] of [["none", "off"], ["kling", "Kling CLI"]]) {
+          const o = document.createElement("option");
+          o.value = value;
+          o.textContent = label;
+          if (video.provider === value) o.selected = true;
+          vidBackend.appendChild(o);
+        }
+        const vidModel = document.createElement("input");
+        vidModel.value = video.model ?? "";
+        vidModel.placeholder = "e.g. kling-video-v2_5";
+        const vidDur = document.createElement("input");
+        vidDur.value = video.defaultDurationSeconds != null ? String(video.defaultDurationSeconds) : "";
+        vidDur.placeholder = "default duration (seconds), e.g. 5";
+        const saveVid = document.createElement("button");
+        saveVid.className = "pill gold";
+        saveVid.innerHTML = `<span class="orb">✓</span>Save`;
+        saveVid.onclick = async () => {
+          const d = vidDur.value.trim() ? Number(vidDur.value.trim()) : undefined;
+          await apiFetch("/api/settings-video", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              provider: vidBackend.value,
+              model: vidModel.value.trim() || undefined,
+              defaultDurationSeconds: Number.isFinite(d) && d > 0 ? Math.round(d) : undefined,
+            }),
+          });
+          await loadSettings();
+        };
+        vidBackend.onchange = async () => {
+          await apiFetch("/api/settings-video", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider: vidBackend.value }),
+          });
+          await loadSettings();
+        };
+        vidField.appendChild(vidBackend);
+        vidField.appendChild(vidModel);
+        vidField.appendChild(vidDur);
+        vidField.appendChild(saveVid);
+        vid.appendChild(vidField);
+        const klingNote = document.createElement("div");
+        klingNote.className = "sub";
+        klingNote.innerHTML = "Uses the Kling slot above for API key when image is also on Kling.";
+        vid.appendChild(klingNote);
+        wrap.appendChild(vid);
         return wrap;
       }
 

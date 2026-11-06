@@ -113,7 +113,7 @@ test("the image tool writes a png into the project", async () => {
   assert.equal(result.meta?.provider, "openai-compatible")
   assert.equal(result.meta?.model, "test-image-1")
 
-  const file = path.join(projectRoot, result.meta!.path)
+  const file = path.join(projectRoot, String(result.meta!.path))
   assert.ok(fs.existsSync(file), "the image should be written into the project")
   const bytes = fs.readFileSync(file)
   assert.equal(bytes.subarray(1, 4).toString(), "PNG")

@@ -171,9 +171,9 @@ test("a secret that was printed does not reach the transcript", () => {
 })
 
 test("the preview is served in its own origin", async () => {
-  const { server, base, token } = await startServer()
+  const { server, base, token, root } = await startServer()
   try {
-    fs.writeFileSync(path.join(server.projectRoot, "page.html"), "<h1>hi</h1>")
+    fs.writeFileSync(path.join(root, "page.html"), "<h1>hi</h1>")
     const response = await fetch(`${base}/preview/page.html`, { headers: { "x-punani-token": token } })
     assert.equal(response.status, 200)
     const policy = response.headers.get("content-security-policy") ?? ""

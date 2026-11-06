@@ -3,6 +3,7 @@ import { KNOWN_MCP_SERVERS } from "../mcp/client.js"
 import type { McpServerConfig } from "../mcp/client.js"
 import type { ImageSettings } from "../tool/image.js"
 import type { AudioSettings } from "../tool/audio.js"
+import type { VideoSettings } from "../tool/video.js"
 import { redact } from "../core/redact.js"
 import { log } from "../core/logger.js"
 
@@ -35,6 +36,7 @@ export interface SettingsView {
     builtin: boolean
   }[]
   image: Omit<ImageSettings, "apiKey"> & { hasKey: boolean }
+  video: VideoSettings
   audio: Omit<AudioSettings, "apiKey"> & { hasKey: boolean }
   mcp: McpServerConfig[]
   knownMcp: { name: string; note: string; command: string }[]
@@ -64,6 +66,7 @@ export class Settings {
     })
 
     const image = { ...stored.image }
+    const video = { ...(stored.video ?? { provider: "none" as const }) }
     const audio = { ...stored.audio }
     const mk = stored.mediaKeys ?? {}
     const imageHasKey =
@@ -86,6 +89,7 @@ export class Settings {
       mediaKeys,
       providers,
       image: { ...image, hasKey: imageHasKey },
+      video,
       audio: { ...audio, hasKey: audioHasKey },
       mcp: stored.mcp.map((server) => ({
         ...server,
@@ -153,6 +157,19 @@ export class Settings {
 
   removeProvider(providerId: string): { ok: boolean } {
     this.config.removeProvider(providerId)
+    return { ok: true }
+  }
+
+  /** Short video via Kling CLI (same OAuth as image). */
+  setVideo(input: Partial<VideoSettings>): { ok: boolean; error?: string } {
+    const current = this.config.videoSettings()
+    const next: VideoSettings = { ...current }
+    if (input.provider !== undefined) next.provider = input.provider === "kling" ? "kling" : "none"
+    if (input.model !== undefined) next.model = input.model
+    if (input.outputDir !== undefined) next.outputDir = input.outputDir
+    if (input.timeoutSeconds !== undefined) next.timeoutSeconds = input.timeoutSeconds
+    if (input.defaultDurationSeconds !== undefined) next.defaultDurationSeconds = input.defaultDurationSeconds
+    this.config.setVideoSettings(next)
     return { ok: true }
   }
 

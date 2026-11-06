@@ -23,7 +23,7 @@ export interface PromptParts {
 
 export function buildSystemPrompt(
   projectRoot: string,
-  capabilities: { image?: boolean; audio?: boolean; vision?: boolean } = {},
+  capabilities: { image?: boolean; audio?: boolean; video?: boolean; vision?: boolean } = {},
   parts: PromptParts = {},
 ): string {
   // A relative path is easier to read, but only while it stays short. A path
@@ -77,6 +77,7 @@ export function buildSystemPrompt(
     "- Use short paragraphs. Use `- ` bullet lines for steps, options, or lists of files.",
     "- Do not use # headings, **bold**, tables, or ``` code fences. The terminal and browser strip markdown syntax.",
     "- Put commands, paths, and code identifiers in backticks.",
+    "- When you cite lines from a file, separate the path from the range: `README.md` lines 7–9, or `README.md:7-9`. Never run the file name into the word lines (that reads like a typo, e.g. README.mdlines).",
     "- When something fails, say what failed, why, and what to do next.",
     "  Never answer with a bare error string like 'connection refused'.",
     "- If a task needs information you cannot get from the tools, say so plainly.",
@@ -99,6 +100,11 @@ export function buildSystemPrompt(
   if (capabilities.audio) {
     media.push(
       "- You can turn a written script into speech with the `audio` tool. Write the script as narration the listener should hear.",
+    )
+  }
+  if (capabilities.video) {
+    media.push(
+      "- You can generate short videos with the `video` tool. Say duration in seconds when cost matters; shorter clips use fewer credits.",
     )
   }
   if (capabilities.vision) {

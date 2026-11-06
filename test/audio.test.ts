@@ -103,7 +103,7 @@ test("the audio tool writes the speech into the project", async () => {
 
   assert.equal(permission, "audio")
   assert.equal(result.meta?.provider, "elevenlabs")
-  const file = path.join(projectRoot, result.meta!.path)
+  const file = path.join(projectRoot, String(result.meta!.path))
   assert.ok(fs.existsSync(file), "the audio file should be written into the project")
   assert.match(fs.readFileSync(file, "utf8"), /fake-audio-bytes/)
   assert.match(result.output, /bytes of audio\/mpeg/)

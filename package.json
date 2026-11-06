@@ -32,7 +32,7 @@
     "dev": "tsx src/main.ts",
     "web:dev": "tsx src/main.ts web",
     "start": "node dist/main.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
     "clean": "rm -rf dist",
     "logo": "node scripts/make-logo.mjs",
     "demo": "bash scripts/demo.sh",
