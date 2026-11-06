@@ -473,13 +473,24 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
         if (!assistantStreaming) {
           endReasoning()
           reply = createPlainStream()
-          process.stdout.write(`\n${style.blue(symbol.arrow)} `)
+          // Ensure clean line break before assistant reply
+          if (reasoningOpen) {
+            process.stdout.write("\n")
+            reasoningOpen = false
+            reasoningLines = 0
+          }
+          process.stdout.write(`${style.blue(symbol.arrow)} `)
           assistantStreaming = true
         }
         process.stdout.write(plainStream(event.text, reply))
       } else if (event.text) {
         endReasoning()
         endAssistantStream()
+        // Ensure assistant line starts on its own line, after any reasoning
+        if (reasoningOpen) {
+          process.stdout.write("\n")
+          reasoningOpen = false
+        }
         assistantLine(plainText(event.text))
       }
       break
@@ -487,13 +498,19 @@ function onEvent(event: import("../agent/agent.js").AgentEvent): void {
       stopSpinner()
       if (event.text) {
         if (!reasoningOpen) {
-          endAssistantStream()
-          process.stdout.write(`\n${style.gray("  thinking")}\n`)
+          // Start reasoning with a clear "thinking" indicator
+          process.stdout.write("\n  thinking\n")
           reasoningOpen = true
           reasoningAtLineStart = true
           reasoningLines = 0
         }
         writeReasoning(event.text)
+      } else {
+        // Reasoning completed without new text - close thinking section cleanly
+        if (reasoningOpen) {
+          process.stdout.write("\n")
+          reasoningOpen = false
+        }
       }
       break
     case "tool_start":
