@@ -450,7 +450,7 @@ export async function fetchIteraCompute(
   apiKey: string | undefined,
 ): Promise<CatalogResult> {
   if (!apiKey) {
-    return { models: [], notes: [], error: "no API key configured" }
+    throw new CatalogError("no API key configured", "Add your Itera API key to use eligible free models, including Qwen.")
   }
 
   const url = `${base(provider)}/v1/models`
