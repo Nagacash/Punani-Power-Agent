@@ -5,7 +5,7 @@
  * same record works for a remote API, a local Ollama daemon, or a proxy router.
  */
 
-export type ProviderKind = "freellmapi" | "ollama" | "lmstudio" | "openai-compatible" | "anthropic"
+export type ProviderKind = "freellmapi" | "ollama" | "lmstudio" | "openai-compatible" | "anthropic" | "iteracompute" | "iteracompute"
 
 export type ProviderSource = "builtin" | "user" | "env"
 
