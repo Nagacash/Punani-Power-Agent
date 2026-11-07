@@ -434,6 +434,71 @@ export async function fetchAnthropic(
   return { models: models.filter((model) => model.id !== ""), notes: [] }
 }
 
+export interface IteraModel {
+  id: string
+  name?: string
+  description?: string
+  max_tokens?: number
+  pricing?: {
+    input: number
+    output: number
+  }
+}
+
+export async function fetchIteraCompute(
+  provider: ProviderConfig,
+  apiKey: string | undefined,
+): Promise<CatalogResult> {
+  if (!apiKey) {
+    return { models: [], notes: [], error: "no API key configured" }
+  }
+
+  const url = `${base(provider)}/v1/models`
+  let payload: any
+  try {
+    payload = await fetchJson(url, authHeaders(apiKey))
+  } catch (error) {
+    throw new CatalogError(
+      `could not reach Itera Compute at ${url}: ${error instanceof Error ? error.message : String(error)}`,
+      "Check that your Itera API key is correct and that you have access to the free tier.",
+    )
+  }
+
+  const rows: any[] = Array.isArray(payload?.data) ? payload.data : []
+  const models: ModelInfo[] = rows.map((row) => {
+    const id = String(row?.id ?? row?.model ?? "")
+    const name = String(row?.name ?? row?.display_name ?? id)
+    const contextWindow =
+      Number(row?.context_window) || Number(row?.context_length) || provider.defaultContextWindow || 32_768
+    const maxOutput = Number(row?.max_output_tokens) || undefined
+    const cost = parsePricing(row)
+    const toolSupport = detectToolSupport(row)
+    const reasoning = detectReasoning(row)
+    const vision = detectVision(row)
+
+    let status: ModelInfo["status"] = "active"
+    if (!id) {
+      status = "unavailable"
+    }
+
+    return {
+      id,
+      providerID: provider.id,
+      name,
+      contextWindow,
+      maxOutput,
+      toolSupport,
+      reasoning,
+      vision,
+      cost,
+      status,
+      origin: "catalog",
+    } satisfies ModelInfo
+  })
+
+  return { models: models.filter((m) => m.id !== ""), notes: [] }
+}
+
 /* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
@@ -453,5 +518,7 @@ export async function fetchCatalog(
       return fetchAnthropic(provider, apiKey)
     case "openai-compatible":
       return fetchOpenAICompatible(provider, apiKey)
+    case "iteracompute":
+      return fetchIteraCompute(provider, apiKey)
   }
 }

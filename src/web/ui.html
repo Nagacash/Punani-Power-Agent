@@ -2190,7 +2190,7 @@
               if (badge) badge.outerHTML = keyBadge(p);
               loadProviders();
             };
-            field.appendChild(where);
+field.appendChild(where);
 
             const input = document.createElement("input");
             input.type = "password";
@@ -2201,6 +2201,17 @@
                 ? "key on disk — type to replace"
                 : "paste the API key";
             input.autocomplete = "off";
+            // Helper text for Itera Compute
+            const helper = document.createElement("div");
+            helper.className = "hintline";
+            helper.style.marginTop = "4px";
+            helper.style.fontSize = "10px";
+            helper.style.color = var(--paper-faint);
+            helper.textContent = p.id === "iteracompute"
+              ? "Add your Itera API key to use eligible free models, including Qwen. Your existing free models remain unchanged."
+              : "";
+            field.appendChild(input);
+            field.appendChild(helper);
             const save = document.createElement("button");
             save.className = "pill gold";
             save.innerHTML = `<span class="orb">✓</span>Save`;
@@ -2232,7 +2243,6 @@
               loadProviders();
               focusComposer();
             };
-            field.appendChild(input);
             field.appendChild(save);
             if (p.hasKey || inBrowser) {
               const clear = document.createElement("button");
@@ -2254,8 +2264,8 @@
               };
               field.appendChild(clear);
             }
-        }
-        const url = document.createElement("input");
+          }
+          const url = document.createElement("input");
         url.value = p.baseURL;
         url.placeholder = "base URL";
         const setUrl = document.createElement("button");

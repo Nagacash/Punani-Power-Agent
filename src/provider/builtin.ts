@@ -141,6 +141,30 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     seedModels: [],
     requiresKey: true,
   },
+{
+    config: {
+      id: "cerebras",
+      kind: "openai-compatible",
+      name: "Cerebras",
+      baseURL: "https://api.cerebras.ai/v1",
+      env: "CEREBRAS_API_KEY",
+      defaultContextWindow: 128_000,
+    },
+    seedModels: [],
+    requiresKey: true,
+  },
+  {
+    config: {
+      id: "iteracompute",
+      kind: "iteracompute",
+      name: "Itera Compute",
+      baseURL: "https://platform.iteracompute.com/v1",
+      env: "ITERACOMPUTE_API_KEY",
+      defaultContextWindow: 32_768,
+    },
+    seedModels: [],
+    requiresKey: true,
+  },
 ]
 
 export function builtinByKind(kind: ProviderKind): BuiltinProvider | undefined {
